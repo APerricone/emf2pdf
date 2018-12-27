@@ -72,7 +72,7 @@ const char* emfNames[] = {
 	"EMR_WIDENPATH", /*66*/
 	"EMR_SELECTCLIPPATH", /*67*/
 	"EMR_ABORTPATH", /*68*/
-
+	"RESERVED_69",/*69*/
 	"EMR_GDICOMMENT", /*70*/
 	"EMR_FILLRGN", /*71*/
 	"EMR_FRAMERGN", /*72*/
@@ -137,74 +137,237 @@ const char* emfNames[] = {
 	"END"
 };
 
-
-size_t pdf_Header(FILE *f);
-size_t PDF_SelectObject(FILE *f);
-
-int main(int argc,const char* argv[])
+struct emf2PdfFont
 {
-	const char *fileToOpen = "eofill.emf";
-	if (argc > 1) fileToOpen = argv[1];
-#ifdef WIN32
-	FILE *f;
-	errno_t err=fopen_s(&f,fileToOpen, "rb");
-	if (err > 0)
-	{
-		printf("Error file %s - %i", fileToOpen,err);
-		return -1;
-	}
-#else
-	FILE *f = fopen(fileToOpen, "rb");	
-#endif
-	int i = EMR_SETWINDOWORGEX;
-	if(!f)
-	{
-		printf("File not found %s", fileToOpen);
-		return -1;
-	}
-	while(!feof(f))
-	{
-		unsigned long code, size;
-		size_t r = fread(&code, sizeof(unsigned long), 1, f);
-		if (r < 1) break;
-		r=fread(&size, sizeof(unsigned long), 1, f);
-		if (r < 1) break;
-		size_t nRead = 8;
-		printf("Record %i(%s) length %i\r\n", code, emfNames[code-1], size);
-		switch (code)
-		{
-		case 1: nRead += pdf_Header(f); break;
-		case 37: nRead+= PDF_SelectObject(f); break;
-		}
-		fseek(f, size - nRead, SEEK_CUR);
+	HPDF_Font font;
+	float height, width;
+	bool fakeBold;
+	bool fakeItalic;
+};
 
-	}
-	fclose(f);
+struct emf2PdfPen
+{
+	float width,r,g,b;
+};
+
+struct emf2PdfBrush
+{
+	bool solid;
+	float r, g, b;
+};
+
+struct emf2PdfData
+{
+	HPDF_Doc pdf;
+	HPDF_Page page;
+	float currHeight;
+	float xScale, yScale,scale;
+	struct
+	{
+		int id;
+		int type;
+		union
+		{
+			emf2PdfFont font;
+			emf2PdfPen pen;
+			emf2PdfBrush brush;
+		};
+	} *created;
+	float currX, currY;
+	bool inPath;
+	float pathStartX, pathStartY;
+	emf2PdfFont currentFont;
+	emf2PdfPen currentPen;
+	emf2PdfBrush currentBrush;
+} e2pd;
+
+void InitEMF2PDF(emf2PdfData &d, HPDF_Doc pdf)
+{
+	d.pdf = pdf;
+	d.page = HPDF_AddPage(pdf);
+	d.xScale = d.yScale = d.scale = 0;
+	d.inPath = false;
+	d.created = 0;
+	d.currX = d.currY = 0;
+	d.currentFont.font = HPDF_GetFont(pdf, "Helvetica", 0);
+	d.currentFont.height = 14;
+	d.currentFont.width = 0;
+	d.currentFont.fakeBold = d.currentFont.fakeItalic = false;
+	d.currentPen.r = d.currentPen.g = d.currentPen.b = 0.f;
+	d.currentBrush.solid = true;
+	d.currentBrush.r = d.currentBrush.g = d.currentBrush.b = 0.f;
 }
 
-size_t pdf_Header(FILE *f)
+size_t EMF2PDF_Header(FILE *f,HPDF_Doc pdf)
 {
 	size_t nRead = 0;
 	RECTL frame;
 	fread(&frame, sizeof(RECTL), 1, f); //bounds
 	fread(&frame, sizeof(RECTL), 1, f); // frame
 	printf("  Page size %ix%i (%ix%i)\r\n", frame.right, frame.bottom, frame.left, frame.top);
+	InitEMF2PDF(e2pd, pdf);
+	HPDF_Page_SetWidth(e2pd.page, (HPDF_REAL)(frame.right * 18. / 635.));
+	HPDF_Page_SetHeight(e2pd.page, (HPDF_REAL)(frame.bottom * 18. / 635.));
 	nRead += sizeof(RECTL) * 2;
 	fseek(f, 40, SEEK_CUR);
 	SIZEL mm;
 	fread(&mm, sizeof(SIZEL), 1, f); // frame
 	printf("  mm %ix%i\r\n", mm.cx,mm.cy);
+	e2pd.xScale = (frame.right * 18.f) / (635.f * mm.cx);
+	e2pd.yScale = (frame.bottom * 18.f) / (635.f * mm.cy);
+	e2pd.scale = e2pd.xScale > e2pd.yScale ? e2pd.xScale : e2pd.yScale;
 	nRead += 40+sizeof(SIZEL);
+	e2pd.currHeight = HPDF_Page_GetHeight(e2pd.page);
 	return nRead;
 }
 
-size_t PDF_SelectObject(FILE *f)
+size_t EMF2PDF_MoveToEx(FILE *f)
+{
+	POINTL p;
+	fread(&p, sizeof(POINTL), 1, f); // pos
+	e2pd.currX = p.x * e2pd.xScale;
+	e2pd.currY = e2pd.currHeight - p.y * e2pd.yScale;
+	e2pd.pathStartX = e2pd.currX;
+	e2pd.pathStartY = e2pd.currY;
+	printf("  move to %i,%i\r\n", p.x, p.y);
+	HPDF_Page_MoveTo(e2pd.page, e2pd.currX, e2pd.currY);
+	return sizeof(POINTL);
+}
+
+size_t EMF2PDF_LineTo(FILE *f)
+{
+	POINTL p;
+	fread(&p, sizeof(POINTL), 1, f); // pos
+	e2pd.currX = p.x * e2pd.xScale;
+	e2pd.currY = e2pd.currHeight - p.y * e2pd.yScale;
+	printf("  move to %i,%i\r\n", p.x, p.y);
+	HPDF_Page_LineTo(e2pd.page, e2pd.currX, e2pd.currY);
+	if (!e2pd.inPath) HPDF_Page_Stroke(e2pd.page);
+	return sizeof(POINTL);
+}
+
+
+size_t EMF2PDF_SelectObject(FILE *f)
 {
 	unsigned long obj;
-	fread(&obj, 4, 1, f); //bounds
-	if(obj>0x1000000)
+	fread(&obj, 4, 1, f);
+	if(obj>=0x80000000) {
 		printf(" Obj 0x%8X\r\n", obj);
-	else
+		switch (obj & 0xFF)
+		{
+		case WHITE_BRUSH:
+			e2pd.currentBrush.solid = true;
+			e2pd.currentBrush.r = e2pd.currentBrush.g = e2pd.currentBrush.b = 1.f;
+			HPDF_Page_SetRGBFill(e2pd.page, e2pd.currentBrush.r, e2pd.currentBrush.g, e2pd.currentBrush.b);
+			break;
+		case LTGRAY_BRUSH:
+			e2pd.currentBrush.solid = true;
+			e2pd.currentBrush.r = e2pd.currentBrush.g = e2pd.currentBrush.b = 0.75f;
+			HPDF_Page_SetRGBFill(e2pd.page, e2pd.currentBrush.r, e2pd.currentBrush.g, e2pd.currentBrush.b);
+			break;
+		case GRAY_BRUSH:
+			e2pd.currentBrush.solid = true;
+			e2pd.currentBrush.r = e2pd.currentBrush.g = e2pd.currentBrush.b = 0.5f;
+			HPDF_Page_SetRGBFill(e2pd.page, e2pd.currentBrush.r, e2pd.currentBrush.g, e2pd.currentBrush.b);
+			break;
+		case DKGRAY_BRUSH:
+			e2pd.currentBrush.solid = true;
+			e2pd.currentBrush.r = e2pd.currentBrush.g = e2pd.currentBrush.b = 0.25f;
+			HPDF_Page_SetRGBFill(e2pd.page, e2pd.currentBrush.r, e2pd.currentBrush.g, e2pd.currentBrush.b);
+			break;
+		case BLACK_BRUSH:
+			e2pd.currentBrush.solid = true;
+			e2pd.currentBrush.r = e2pd.currentBrush.g = e2pd.currentBrush.b = 0.f;
+			HPDF_Page_SetRGBFill(e2pd.page, e2pd.currentBrush.r, e2pd.currentBrush.g, e2pd.currentBrush.b);
+			break;
+		case NULL_BRUSH:
+			e2pd.currentBrush.solid = false;
+			break;
+		case WHITE_PEN:
+			e2pd.currentPen.width = 1;
+			e2pd.currentPen.r = e2pd.currentPen.g = e2pd.currentPen.b = 1.f;
+			HPDF_Page_SetLineWidth(e2pd.page, e2pd.currentPen.width*e2pd.scale);
+			HPDF_Page_SetRGBStroke(e2pd.page, e2pd.currentPen.r, e2pd.currentPen.g, e2pd.currentPen.b);
+			break;
+		case BLACK_PEN:
+			e2pd.currentPen.width = 1;
+			e2pd.currentPen.r = e2pd.currentPen.g = e2pd.currentPen.b = 0.f;
+			HPDF_Page_SetLineWidth(e2pd.page, e2pd.currentPen.width*e2pd.scale);
+			HPDF_Page_SetRGBStroke(e2pd.page, e2pd.currentPen.r, e2pd.currentPen.g, e2pd.currentPen.b);
+			break;
+		case NULL_PEN:
+			e2pd.currentPen.width = 0;
+			e2pd.currentPen.r = e2pd.currentPen.g = e2pd.currentPen.b = 0.f;
+			break;
+		case OEM_FIXED_FONT:
+		case ANSI_FIXED_FONT:
+		case ANSI_VAR_FONT:
+		case SYSTEM_FONT:
+		case DEVICE_DEFAULT_FONT:
+		case DEFAULT_PALETTE:
+		case SYSTEM_FIXED_FONT:
+		case DEFAULT_GUI_FONT:
+		case DC_BRUSH:
+		case DC_PEN:
+			//TODO
+			break;
+		}
+	} else {
 		printf(" Obj %i\r\n", obj);
+	}
 	return 4;
+}
+
+void AddEMF2PDF(HPDF_Doc pdf, FILE *f)
+{
+	while (!feof(f))
+	{
+		unsigned long code, size;
+		size_t r = fread(&code, sizeof(unsigned long), 1, f);
+		if (r < 1) break;
+		r = fread(&size, sizeof(unsigned long), 1, f);
+		if (r < 1) break;
+		size_t nRead = 8;
+		printf("Record %i(%s) length %i\r\n", code, emfNames[code - 1], size);
+		switch (code)
+		{
+		case EMR_HEADER:		nRead += EMF2PDF_Header(f, pdf); break;
+		case EMR_MOVETOEX:		nRead += EMF2PDF_MoveToEx(f); break;
+		case EMR_SELECTOBJECT:	nRead += EMF2PDF_SelectObject(f); break;
+		case EMR_LINETO:		nRead += EMF2PDF_LineTo(f); break;
+		//case EMR_BEGINPATH:		nRead += EMF2PDF_BeginPath(f); break;
+		}
+		fseek(f, size - nRead, SEEK_CUR);
+	}
+}
+
+int main(int argc, const char* argv[])
+{
+	const char *fileToOpen = "eofill.emf";
+	if (argc > 1) fileToOpen = argv[1];
+#ifdef WIN32
+	FILE *f;
+	errno_t err = fopen_s(&f, fileToOpen, "rb");
+	if (err > 0)
+	{
+		printf("Error file %s - %i", fileToOpen, err);
+		return -1;
+	}
+#else
+	FILE *f = fopen(fileToOpen, "rb");
+#endif
+	HPDF_Doc pdf = HPDF_New(0, 0);
+	if (!f)
+	{
+		printf("File not found %s", fileToOpen);
+		return -1;
+	}
+	AddEMF2PDF(pdf, f);
+	fclose(f);
+	int l = strlen(fileToOpen);
+	char *fileToSave = (char*)malloc(l + 2);
+	strcpy_s(fileToSave, l + 2, fileToOpen);
+	char *extension = strrchr(fileToSave, (int)'.');
+	strcpy_s(extension, 5, ".pdf");
+	HPDF_SaveToFile(pdf, fileToSave);
 }
