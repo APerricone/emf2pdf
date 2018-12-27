@@ -1,0 +1,25 @@
+
+hbct.hbc
+-gui
+-i${HB_INSTALL}\contrib\hbhpdf
+-i..\..\include
+-L..\..\lib
+-lFiveH32
+-lFiveHC32 
+xhb.hbc 
+hbmzip.hbc 
+hbziparc.hbc 
+hbhpdf.hbc
+-ldflag=Version.lib 
+-ldflag=oledlg.lib 
+-ldflag=gdiplus.lib 
+-ldflag=/NODEFAULTLIB:libcmt 
+-ldflag=Shlwapi.lib
+
+-inc
+
+
+# -cflag=/Od
+# -cflag=/Zi
+# -cflag=/DEBUG:FULL
+# -ldflag=/DEBUG 
