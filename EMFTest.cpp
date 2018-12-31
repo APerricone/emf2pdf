@@ -206,6 +206,7 @@ private:
 	Brush currentBrush;
 	float rText, gText, bText;
 	FILE *f;
+	boolean polyEO;
 
 	void Reset();
 	void SetCreatedIdx(unsigned long idx);
@@ -213,17 +214,24 @@ private:
 	size_t Header();
 	size_t MoveToEx();
 	size_t LineTo();
+	size_t PolyBezier(unsigned long code);
 	size_t SelectObject();
 	size_t SetTextColor();
 	size_t CreatePen();
 	size_t CreateBrush();
+	size_t BeginPath();
+	size_t CloseFigure();
+	size_t EndPath();
+	size_t FillPath();
+	size_t SelectClipPath();
+	size_t SetPolyFillMode();
 
 	void ParseFile();
 };
 
 Emf2Pdf::Emf2Pdf(HPDF_Doc pdf)
 {
-	pdf = pdf;
+	this->pdf = pdf;
 	nCreated = 0;
 	created = 0;
 	Reset();
@@ -231,7 +239,6 @@ Emf2Pdf::Emf2Pdf(HPDF_Doc pdf)
 
 void Emf2Pdf::Reset()
 {
-	page = HPDF_AddPage(pdf);
 	xScale = yScale = scale = 0;
 	inPath = false;
 	if (created != 0)
@@ -247,6 +254,7 @@ void Emf2Pdf::Reset()
 	currentPen.r = currentPen.g = currentPen.b = 0.f;
 	currentBrush.solid = true;
 	currentBrush.r = currentBrush.g = currentBrush.b = 0.f;
+	polyEO = false;
 }
 
 Emf2Pdf::~Emf2Pdf()
@@ -261,17 +269,24 @@ size_t Emf2Pdf::Header()
 	fread(&frame, sizeof(RECTL), 1, f); //bounds
 	fread(&frame, sizeof(RECTL), 1, f); // frame
 	PRINT_DBG("  Page size %ix%i (%ix%i)\r\n", frame.right, frame.bottom, frame.left, frame.top);
+	page = HPDF_AddPage(pdf);
+	//The dimensions are in 100ths of millimeter, must be 72ths of inch
+	// v/100 -> millimeter
+	// v/100/25.4 --> inch
+	// v/2540*72 --> 72ths of inch
+	// v*72/2540 --> 72ths of inch
+	// v*18/635 --> 72ths of inch
 	HPDF_Page_SetWidth(page, (HPDF_REAL)(frame.right * 18. / 635.));
 	HPDF_Page_SetHeight(page, (HPDF_REAL)(frame.bottom * 18. / 635.));
 	nRead += sizeof(RECTL) * 2;
-	fseek(f, 40, SEEK_CUR);
-	SIZEL mm;
-	fread(&mm, sizeof(SIZEL), 1, f); // frame
-	PRINT_DBG("  mm %ix%i\r\n", mm.cx,mm.cy);
-	xScale = (frame.right * 18.f) / (635.f * mm.cx);
-	yScale = (frame.bottom * 18.f) / (635.f * mm.cy);
+	fseek(f, 32, SEEK_CUR);
+	SIZEL dev;
+	fread(&dev, sizeof(SIZEL), 1, f); // frame 20-21
+	PRINT_DBG("  mm %ix%i\r\n", dev.cx, dev.cy);
+	xScale = (frame.right * 18.f) / (635.f * dev.cx);
+	yScale = (frame.bottom * 18.f) / (635.f * dev.cy);
 	scale = xScale > yScale ? xScale : yScale;
-	nRead += 40+sizeof(SIZEL);
+	nRead += 32+sizeof(SIZEL);
 	currHeight = HPDF_Page_GetHeight(page);
 	return nRead;
 }
@@ -295,10 +310,99 @@ size_t Emf2Pdf::LineTo()
 	fread(&p, sizeof(POINTL), 1, f); // pos
 	currX = p.x * xScale;
 	currY = currHeight - p.y * yScale;
-	PRINT_DBG("  move to %i,%i\r\n", p.x, p.y);
+	PRINT_DBG("  line to %i,%i\r\n", p.x, p.y);
 	HPDF_Page_LineTo(page, currX, currY);
 	if (!inPath) HPDF_Page_Stroke(page);
 	return sizeof(POINTL);
+}
+
+size_t Emf2Pdf::PolyBezier(unsigned long code)
+{
+	size_t ret = sizeof(RECTL) + 4;
+	RECTL r;
+	fread(&r, sizeof(RECTL), 1, f); // pos
+	unsigned long i,nPoint,j;
+	fread(&nPoint, 4, 1, f); // pos
+	PRINT_DBG("  bezier %i points\r\n", nPoint);
+	for (i = 0; i < nPoint; i+=3)
+	{
+		HPDF_REAL x[3],y[3];
+		if (code == EMR_POLYBEZIERTO16)
+		{
+			POINTS pt[3];
+			fread(pt, sizeof(POINTS), 3, f); 
+			ret += sizeof(POINTS) * 3;
+			for (j = 0; j < 3; j++)
+			{
+				x[j] = pt[j].x * xScale;
+				y[j] = currHeight - pt[j].y * yScale;
+			}
+			PRINT_DBG("  %i,%i %i,%i %i,%i\r\n", pt[0].x, pt[0].y, pt[1].x, pt[1].y, pt[2].x, pt[2].y );
+		}
+		else
+		{
+			POINTL pt[3];
+			fread(pt, sizeof(POINTL), 3, f);
+			ret += sizeof(POINTL) * 3;
+			for (j = 0; j < 3; j++)
+			{
+				x[j] = pt[j].x * xScale;
+				y[j] = currHeight - pt[j].y * yScale;
+			}
+			PRINT_DBG("  %i,%i %i,%i %i,%i\r\n", pt[0].x, pt[0].y, pt[1].x, pt[1].y, pt[2].x, pt[2].y);
+		}
+		HPDF_Page_CurveTo(page, x[0], y[0], x[1], y[1], x[2], y[2]);
+		currX = x[2];
+		currY = y[2];
+	}
+	return ret;
+}
+
+size_t Emf2Pdf::BeginPath()
+{
+	inPath = true;
+	return 0;
+}
+
+size_t Emf2Pdf::EndPath()
+{
+	inPath = false;
+	//HPDF_Page_EndPath(page);
+	return 0;
+}
+
+size_t Emf2Pdf::FillPath()
+{
+	if(polyEO)
+		HPDF_Page_Eofill(page);
+	else
+		HPDF_Page_Fill(page);
+	return 0;
+}
+
+size_t Emf2Pdf::CloseFigure()
+{
+	if (currX != pathStartX || currY != pathStartY)
+	{
+#if defined(_CONSOLE_DEBUG)
+		POINTL p;
+		p.x = (LONG)(pathStartX / xScale);
+		p.y = (LONG)(currHeight - (pathStartY / yScale));
+		PRINT_DBG("  line to %i,%i\r\n", p.x, p.y);
+#endif
+		currX = pathStartX;
+		currY = pathStartY;
+		HPDF_Page_LineTo(page, currX, currY);
+	}
+	return 0;
+}
+
+size_t Emf2Pdf::SelectClipPath()
+{
+	// only copy supported
+	//HPDF_Page_Clip(page);
+	HPDF_Page_EndPath(page);
+	return 0;
 }
 
 size_t Emf2Pdf::SelectObject()
@@ -382,7 +486,7 @@ size_t Emf2Pdf::SelectObject()
 				HPDF_Page_SetRGBStroke(page, currentPen.r, currentPen.g, currentPen.b);
 				break;
 			case OBJ_BRUSH:
-				currentBrush.solid = true;
+				currentBrush.solid = itm.brush.solid;
 				currentBrush.r = itm.brush.r;
 				currentBrush.g = itm.brush.g;
 				currentBrush.b = itm.brush.b;
@@ -465,6 +569,16 @@ size_t Emf2Pdf::CreateBrush()
 	return 12;
 }
 
+size_t Emf2Pdf::SetPolyFillMode()
+{
+	unsigned long nMode;
+	fread(&nMode, 4, 1, f);
+	polyEO = nMode == 1;
+	PRINT_DBG("  %s\r\n", polyEO ? "EvenOdd" : "winding");
+	return 4;
+}
+
+
 void Emf2Pdf::ParseFile()
 {
 	while (!feof(f))
@@ -475,7 +589,7 @@ void Emf2Pdf::ParseFile()
 		r = fread(&size, sizeof(unsigned long), 1, f);
 		if (r < 1) break;
 		size_t nRead = 8;
-		PRINT_DBG("Record %i(%s) length %i\r\n", code, emfNames[code - 1], size);
+		PRINT_DBG("Record %i(%s) length %i (gMode 0x%04X)\r\n", code, emfNames[code - 1], size, page? HPDF_Page_GetGMode(page):0);
 		switch (code)
 		{
 		case EMR_HEADER:				nRead += Header(); break;
@@ -485,14 +599,28 @@ void Emf2Pdf::ParseFile()
 		case EMR_CREATEPEN:				nRead += CreatePen(); break;
 		case EMR_CREATEBRUSHINDIRECT:	nRead += CreateBrush(); break;
 		case EMR_LINETO:				nRead += LineTo(); break;
-		//case EMR_BEGINPATH:			  nRead += Emf2Pdf::BeginPath(); break;
+		case EMR_POLYBEZIERTO:
+		case EMR_POLYBEZIERTO16:		nRead += PolyBezier(code); break;
+		case EMR_BEGINPATH:				nRead += BeginPath(); break;
+		case EMR_CLOSEFIGURE:			nRead += CloseFigure(); break;
+		case EMR_ENDPATH:				nRead += EndPath(); break;
+		case EMR_FILLPATH:				nRead += FillPath(); break;
+		case EMR_SELECTCLIPPATH:		nRead += SelectClipPath(); break;
+		case EMR_SETPOLYFILLMODE:		nRead += SetPolyFillMode(); break;
 		}
 		fseek(f, (long)(size - nRead), SEEK_CUR);
+		HPDF_STATUS err = HPDF_GetError(pdf);
+		if (err != HPDF_OK)
+		{
+			PRINT_DBG("HaruPDF Error 0x%4X", err);
+			return;
+		}
 	}
 }
 
 bool Emf2Pdf::AddEMF(const char* cFileName)
 {
+	InitInstalledFont();
 	Reset();
 #ifdef WIN32
 	errno_t err = fopen_s(&f, cFileName, "rb");
@@ -516,10 +644,10 @@ bool Emf2Pdf::AddEMF(const char* cFileName)
 
 Emf2Pdf::SystemFont* Emf2Pdf::installedFont = 0;
 void Emf2Pdf::InitInstalledFont()
-{/*
+{
 	if (installedFont != 0) return;
 	HKEY hFonts;
-	LSTATUS result = RegOpenKeyEx(HKEY_LOCAL_MACHINE, "Software\Microsoft\Windows NT\CurrentVersion\Fonts", 0, KEY_READ, &hFonts);
+	LSTATUS result = RegOpenKeyEx(HKEY_LOCAL_MACHINE, "Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts", 0, KEY_READ, &hFonts);
 	if (result != ERROR_SUCCESS) return;
 	DWORD maxValueNameSize, maxValueDataSize, nSubKeys;
 
@@ -543,22 +671,26 @@ void Emf2Pdf::InitInstalledFont()
 		}
 		installedFont[idxFont].name = new CHAR[valueNameSize];
 		installedFont[idxFont].name = new CHAR[valueNameSize];
-	}*/
+	}
 }
 
 
 //----------------------------------------------------TEST CODE--------------------------------------------------------
 int main(int argc, const char* argv[])
 {
-	const char *fileToOpen = "eofill.emf";
+	const char *fileToOpen = "illusion.emf";
 	if (argc > 1) fileToOpen = argv[1];
 	HPDF_Doc pdf = HPDF_New(0, 0);
 	Emf2Pdf conv(pdf);
 	conv.AddEMF(fileToOpen);
-	size_t l = strlen(fileToOpen);
-	char *fileToSave = (char*)malloc(l + 2);
-	strcpy_s(fileToSave, l + 2, fileToOpen);
-	char *extension = strrchr(fileToSave, (int)'.');
-	strcpy_s(extension, 5, ".pdf");
-	HPDF_SaveToFile(pdf, fileToSave);
+	if (HPDF_GetError(pdf) == HPDF_OK)
+	{
+		size_t l = strlen(fileToOpen);
+		char *fileToSave = (char*)malloc(l + 2);
+		strcpy_s(fileToSave, l + 2, fileToOpen);
+		char *extension = strrchr(fileToSave, (int)'.');
+		strcpy_s(extension, 5, ".pdf");
+		HPDF_SaveToFile(pdf, fileToSave);
+		PRINT_DBG("File salvato in %s\r\n", fileToSave);
+	}
 }
