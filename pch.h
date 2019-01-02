@@ -12,6 +12,7 @@
 // TODO: aggiungere qui le intestazioni da precompilare
 #include <stdio.h>
 #include <windows.h>
+#include <sysinfoapi.h>
 #include "hpdf.h"
 
 #endif //PCH_H

@@ -155,11 +155,13 @@ public:
 private:
 	struct SystemFont
 	{
-		const char* name;
-		const char* path;
+		wchar_t* name;
+		char* path;
 	};
+	static int nInstalledFont;
 	static SystemFont* installedFont;
 	static void InitInstalledFont();
+	static int FindFont(wchar_t* faceName, bool bold, bool italic);
 
 	struct Font
 	{
@@ -225,6 +227,9 @@ private:
 	size_t FillPath();
 	size_t SelectClipPath();
 	size_t SetPolyFillMode();
+	size_t CreatePDFFont();
+	size_t PDFTextOut(unsigned long code);
+	size_t BitBlt();
 
 	void ParseFile();
 };
@@ -300,7 +305,8 @@ size_t Emf2Pdf::MoveToEx()
 	pathStartX = currX;
 	pathStartY = currY;
 	PRINT_DBG("  move to %i,%i\r\n", p.x, p.y);
-	HPDF_Page_MoveTo(page, currX, currY);
+	if(inPath)
+		HPDF_Page_MoveTo(page, currX, currY);
 	return sizeof(POINTL);
 }
 
@@ -308,9 +314,10 @@ size_t Emf2Pdf::LineTo()
 {
 	POINTL p;
 	fread(&p, sizeof(POINTL), 1, f); // pos
+	PRINT_DBG("  line to %i,%i\r\n", p.x, p.y);
+	if (!inPath) HPDF_Page_MoveTo(page, currX, currY);
 	currX = p.x * xScale;
 	currY = currHeight - p.y * yScale;
-	PRINT_DBG("  line to %i,%i\r\n", p.x, p.y);
 	HPDF_Page_LineTo(page, currX, currY);
 	if (!inPath) HPDF_Page_Stroke(page);
 	return sizeof(POINTL);
@@ -482,7 +489,7 @@ size_t Emf2Pdf::SelectObject()
 				currentPen.r = itm.pen.r;
 				currentPen.g = itm.pen.g;
 				currentPen.b = itm.pen.b;
-				HPDF_Page_SetLineWidth(page, currentPen.width*scale);
+				HPDF_Page_SetLineWidth(page, currentPen.width);
 				HPDF_Page_SetRGBStroke(page, currentPen.r, currentPen.g, currentPen.b);
 				break;
 			case OBJ_BRUSH:
@@ -492,6 +499,13 @@ size_t Emf2Pdf::SelectObject()
 				currentBrush.b = itm.brush.b;
 				HPDF_Page_SetRGBFill(page, currentBrush.r, currentBrush.g, currentBrush.b);
 				break;
+			case OBJ_FONT:
+				currentFont.font = itm.font.font;
+				currentFont.height = itm.font.height;
+				currentFont.width = itm.font.width;
+				currentFont.fakeBold = itm.font.fakeBold;
+				currentFont.fakeItalic = itm.font.fakeItalic;
+				HPDF_Page_SetFontAndSize(page, currentFont.font, currentFont.height);
 			}
 		}
 	}
@@ -508,7 +522,7 @@ size_t Emf2Pdf::SetTextColor()
 	rText = (float)r / 255.f;
 	gText = (float)g / 255.f;
 	bText = (float)b / 255.f;
-	PRINT_DBG("  color %i %i %i", r, g, b);
+	PRINT_DBG("  color %i %i %i\r\n", r, g, b);
 	return 4;
 }
 
@@ -578,6 +592,187 @@ size_t Emf2Pdf::SetPolyFillMode()
 	return 4;
 }
 
+int Emf2Pdf::FindFont(wchar_t* faceName, bool bold, bool italic)
+{
+	for (int i = 0; i < nInstalledFont; i++)
+	{
+		if (wcswcs(installedFont[i].name, faceName) == 0) continue;
+		bool isbold = wcswcs(installedFont[i].name, L" bold ");
+		if (isbold != bold) continue;
+		bool isitalic = wcswcs(installedFont[i].name, L" italic ");
+		if (isitalic != italic) continue;
+		return i;
+	}
+	return -1;
+}
+
+size_t Emf2Pdf::CreatePDFFont()
+{
+	InitInstalledFont();
+	size_t ret = 4;
+	unsigned long  idx;
+	fread(&idx, 4, 1, f);
+	SetCreatedIdx(idx);
+	long height, width, weight;
+	fread(&height, 4, 1, f); ret += 4;
+	fread(&width, 4, 1, f); ret += 4;
+	fseek(f, 8, SEEK_CUR); ret += 8;
+	fread(&weight, 4, 1, f); ret += 4;
+	char cItalic;
+	fread(&cItalic, 1, 1, f); ret += 1;
+	fseek(f, 7, SEEK_CUR); ret += 7;
+	wchar_t faceName[32];
+	fread(faceName, 2,32, f); ret += 64;
+	wchar_t *tl = faceName;
+	while (*tl) *tl++ = towlower(*tl);
+	bool bold = weight > 550, italic = cItalic > 0;
+	bool fakeBold = false, fakeItalic = false;
+	PRINT_DBG("  %S %s%s%ix%i\r\n", faceName, bold ? "bold " : "", italic ? "italic " : "", height, width);
+	int i = FindFont(faceName, bold, italic);
+	if (i < 0)
+	{
+		if (bold && italic)
+		{
+			i = FindFont(faceName, false, italic);
+			if (i >= 0) {
+				fakeBold = true;
+			}
+			else {
+				i = FindFont(faceName, bold, false);
+				if (i >= 0) {
+					fakeItalic = true;
+				}
+				else {
+					i = FindFont(faceName, false, false);
+					fakeItalic = true;
+					fakeBold = true;
+				}
+			}
+		}
+		else if (bold || italic)
+		{
+			i = FindFont(faceName, false, false);
+			fakeItalic = italic;
+			fakeBold = bold;
+		}
+	}
+	if (i >= 0)
+	{
+		created[idx].type = OBJ_FONT;
+		const char* loaded = HPDF_LoadTTFontFromFile(pdf, installedFont[i].path, false);
+		created[idx].font.font = HPDF_GetFont(pdf, loaded, 0);
+		created[idx].font.height = abs(height) * yScale;
+		HPDF_Page_SetFontAndSize(page, created[idx].font.font, created[idx].font.height);
+		created[idx].font.width = 1;
+		//if (width == 0) width = 1;
+		HPDF_Box bx =  HPDF_Font_GetBBox(created[idx].font.font);
+		float currWidth = (bx.right - bx.left) *created[idx].font.height / (bx.top- bx.bottom);
+		created[idx].font.width = 1;
+		if (width != 0) created[idx].font.width = width * xScale / currWidth;
+		created[idx].font.fakeBold = fakeBold;
+		created[idx].font.fakeItalic = fakeItalic;
+	}
+	return ret;
+}
+
+size_t Emf2Pdf::PDFTextOut(unsigned long code)
+{
+	size_t ret = 20;
+	fseek(f, 20, SEEK_CUR); //bound and graphics mode
+	float font_xScale, font_yScale;
+	fread(&font_xScale, 4, 1, f); ret += 4;
+	fread(&font_yScale, 4, 1, f); ret += 4;
+	POINTL pos;
+	fread(&pos, 8, 1, f); ret += 8;
+	float nItalic = currentFont.fakeItalic ? 0.333f : 0;
+/*	if (currentFont.fakeBold)
+	{
+		HPDF_Page_SetTextRenderingMode(page, HPDF_FILL_THEN_STROKE);
+		HPDF_Page_SetLineWidth(page, HPDF_Page_GetCurrentFontSize(page) / 20.f);
+	}
+	HPDF_Page_SetTextMatrix(page, currentFont.width, 0, currentFont.width * nItalic, 1, 0, 0);
+*/	unsigned long nChar, strOff,dxOff;
+	RECTL rect;
+	fread(&nChar, 4, 1, f); ret += 4;
+	fread(&strOff, 4, 1, f); ret += 4; strOff -= 8;
+	unsigned long opts;
+	fread(&opts, 4, 1, f); ret += 4;//opts
+	fread(&rect, 16, 1, f); ret += 16;
+	fread(&dxOff, 4, 1, f); ret += 4; dxOff -= 8;
+	if (strOff>ret) fseek(f, strOff - ret, SEEK_CUR); ret = strOff;
+	char *str = (char*)malloc(sizeof(char)*(nChar + 1));
+	str[nChar] = 0;
+	size_t ll;
+	if (code == EMR_EXTTEXTOUTW)
+	{
+		wchar_t *strw = (wchar_t*)malloc(sizeof(wchar_t)*(nChar + 1));
+		strw[nChar] = 0;
+		fread(strw, sizeof(wchar_t), nChar, f);  ret += sizeof(wchar_t)*nChar ;
+		wcstombs_s(&ll, str, nChar + 1, strw, nChar+1);
+		free(strw);
+	}
+	else
+	{
+		fread(str, 1, nChar, f); ret += nChar;
+		ll = strlen(str);
+	}
+	if (dxOff > ret) fseek(f, dxOff - ret, SEEK_CUR); ret = dxOff;
+	PRINT_DBG("  %i,%i -> %s\r\n", pos.x, pos.y, str);
+	if (ll == 0) return ret;
+	HPDF_Page_BeginText(page);
+	HPDF_Page_SetRGBFill(page, rText, gText, bText);
+	HPDF_Page_SetRGBStroke(page, rText, gText, bText);
+	if (currentFont.fakeBold)
+	{
+		HPDF_Page_SetTextRenderingMode(page, HPDF_FILL_THEN_STROKE);
+		HPDF_Page_SetLineWidth(page, HPDF_Page_GetCurrentFontSize(page) / 20.f);
+	}
+	HPDF_Page_SetTextMatrix(page, currentFont.width, 0, currentFont.width * nItalic, 1, 0, 0);
+
+	unsigned long* dx = (unsigned long*)malloc(sizeof(unsigned long)*nChar);
+	fread(dx, sizeof(unsigned long), nChar, f);  ret += sizeof(unsigned long)*nChar;
+	float x = pos.x * xScale;
+	float ch = HPDF_Font_GetAscent(currentFont.font) * currentFont.height /1024;
+	float y = currHeight - pos.y * yScale - ch;
+	float y0 = currHeight - rect.bottom*yScale;
+	float y1 = currHeight - rect.top*yScale;
+	float endW = 1e20;
+	if (opts & ETO_CLIPPED)
+	{
+		endW = rect.right * xScale;
+	}
+	char out[2]; out[1] = 0;
+	for (unsigned int i = 0; i < nChar; i++)
+	{
+		//float x1 = x + 2*dx[i] * xScale / currentFont.width;
+		if(i>=ll)
+			out[0] =0;
+		else
+			out[0] = str[i];
+		//HPDF_Page_TextRect(page, x, y0, x1, y1, out, HPDF_TALIGN_LEFT,0);
+		HPDF_Page_TextOut(page, x, y, out);
+		x += dx[i] * xScale;
+		if (x > endW)
+			break;
+	}
+	free(str);
+	free(dx);
+	HPDF_Page_EndText(page);
+	HPDF_Page_SetTextRenderingMode(page, HPDF_FILL);
+	return ret;
+}
+
+size_t Emf2Pdf::BitBlt()
+{
+	RECTL bound;
+	fread(&bound, 4, 4, f);
+	printf("  %i,%i-%i,%i\r\n", bound.left, bound.top, bound.right, bound.bottom);
+	// always do a filled rectangle
+	HPDF_Page_Rectangle(page, bound.left* xScale, currHeight - bound.bottom * yScale,
+		(bound.right - bound.left) * xScale, (bound.bottom - bound.top) * yScale);
+	HPDF_Page_Fill(page);
+	return 16;
+}
 
 void Emf2Pdf::ParseFile()
 {
@@ -607,12 +802,17 @@ void Emf2Pdf::ParseFile()
 		case EMR_FILLPATH:				nRead += FillPath(); break;
 		case EMR_SELECTCLIPPATH:		nRead += SelectClipPath(); break;
 		case EMR_SETPOLYFILLMODE:		nRead += SetPolyFillMode(); break;
+		case EMR_EXTCREATEFONTINDIRECTW:nRead += CreatePDFFont(); break;
+		case EMR_EXTTEXTOUTW:
+		case EMR_EXTTEXTOUTA:			nRead += PDFTextOut(code); break;
+		case EMR_BITBLT:				nRead += BitBlt(); break;
+
 		}
 		fseek(f, (long)(size - nRead), SEEK_CUR);
 		HPDF_STATUS err = HPDF_GetError(pdf);
 		if (err != HPDF_OK)
 		{
-			PRINT_DBG("HaruPDF Error 0x%4X", err);
+			PRINT_DBG("HaruPDF Error 0x%4X (gMode 0x%04X)", err, page ? HPDF_Page_GetGMode(page) : 0);
 			return;
 		}
 	}
@@ -642,6 +842,7 @@ bool Emf2Pdf::AddEMF(const char* cFileName)
 	return true;
 }
 
+int Emf2Pdf::nInstalledFont = 0;
 Emf2Pdf::SystemFont* Emf2Pdf::installedFont = 0;
 void Emf2Pdf::InitInstalledFont()
 {
@@ -649,36 +850,57 @@ void Emf2Pdf::InitInstalledFont()
 	HKEY hFonts;
 	LSTATUS result = RegOpenKeyEx(HKEY_LOCAL_MACHINE, "Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts", 0, KEY_READ, &hFonts);
 	if (result != ERROR_SUCCESS) return;
-	DWORD maxValueNameSize, maxValueDataSize, nSubKeys;
+	DWORD maxValueNameSize, maxValueDataSize, nValues;
 
-	result = RegQueryInfoKey(hFonts, 0, 0, 0, &nSubKeys, 0, 0, 0, &maxValueNameSize, &maxValueDataSize, 0, 0);
+	result = RegQueryInfoKey(hFonts, 0, 0, 0, 0, 0, 0, &nValues, &maxValueNameSize, &maxValueDataSize, 0, 0);
 
-	if (result != ERROR_SUCCESS) return;
-	installedFont = (Emf2Pdf::SystemFont*)malloc(sizeof(Emf2Pdf::SystemFont)*nSubKeys);
-	LPSTR valueName = new CHAR[maxValueNameSize];
-
-	LPBYTE valueData = new BYTE[maxValueDataSize];
+	if (result != ERROR_SUCCESS)
+	{
+		RegCloseKey(hFonts);
+		return;
+	}
+	installedFont = (Emf2Pdf::SystemFont*)malloc(sizeof(Emf2Pdf::SystemFont)*nValues);
+	LPWSTR valueName = new WCHAR[maxValueNameSize];
+	LPWSTR valueData = new WCHAR[maxValueDataSize];
+	LPSTR tmpValData = new CHAR[maxValueDataSize];
 	DWORD idxFont = 0;
-	for (DWORD i = 0; i < nSubKeys; i++)
+	char winDir[MAX_PATH];
+	GetSystemWindowsDirectoryA(winDir, MAX_PATH);
+	strcat_s<MAX_PATH>(winDir,"\\fonts\\");
+	size_t windDirPath = strlen(winDir);
+	for (DWORD i = 0; i < nValues; i++)
 	{
 		DWORD valueNameSize = maxValueNameSize, valueDataSize = maxValueDataSize;
 		DWORD valueType;
-		result = RegEnumValue(hFonts, i, valueName, &valueNameSize, 0, &valueType, valueData, &valueDataSize);
+		result = RegEnumValueW(hFonts, i, valueName, &valueNameSize, 0, &valueType, (LPBYTE)valueData, &valueDataSize);
 		if (result != ERROR_SUCCESS || valueType != REG_SZ) {
-
 			continue;
-
 		}
-		installedFont[idxFont].name = new CHAR[valueNameSize];
-		installedFont[idxFont].name = new CHAR[valueNameSize];
+		size_t lName = wcslen(valueName) + 1;
+		size_t lData = wcslen(valueData) + 1;
+		installedFont[idxFont].name = new WCHAR[lName];
+		installedFont[idxFont].path = new CHAR[windDirPath+lData];
+		wchar_t *tl = valueName;
+		while (*tl) *tl++ = towlower(*tl);
+		wcscpy_s(installedFont[idxFont].name, lName, (wchar_t*)valueName);
+		strcpy_s(installedFont[idxFont].path, windDirPath + lData, winDir);
+		size_t tmp;
+		wcstombs_s(&tmp, tmpValData, maxValueDataSize, valueData, maxValueDataSize);
+		strcat_s(installedFont[idxFont].path, windDirPath + lData, tmpValData);
+		idxFont += 1;
 	}
+	delete [] valueName;
+	delete [] valueData;
+	delete [] tmpValData;
+	RegCloseKey(hFonts);
+	nInstalledFont = idxFont;
 }
 
 
 //----------------------------------------------------TEST CODE--------------------------------------------------------
 int main(int argc, const char* argv[])
 {
-	const char *fileToOpen = "illusion.emf";
+	const char *fileToOpen = "ReportStandard.emf";
 	if (argc > 1) fileToOpen = argv[1];
 	HPDF_Doc pdf = HPDF_New(0, 0);
 	Emf2Pdf conv(pdf);
