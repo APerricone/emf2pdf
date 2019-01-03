@@ -140,7 +140,7 @@ const char* emfNames[] = {
 	"END"
 };
 #else
-#define PRINT_DBG 
+#define PRINT_DBG(...)
 #endif
 
 class Emf2Pdf
@@ -235,8 +235,7 @@ private:
 	size_t PDFTextOut(unsigned long code);
 	size_t SetTextAlign();
 	size_t BitBlt();
-	
-	
+	size_t StretchDiBits();
 
 	void ParseFile();
 };
@@ -244,7 +243,7 @@ private:
 Emf2Pdf::Emf2Pdf(HPDF_Doc pdf)
 {
 	this->pdf = pdf;
-	HPDF_SetCurrentEncoder(pdf, "CP1252");
+	HPDF_SetCurrentEncoder(pdf, "WinAnsiEncoding");
 	Reset();
 }
 
@@ -417,7 +416,7 @@ size_t Emf2Pdf::SelectClipPath()
 {
 	// only copy supported
 	//HPDF_Page_Clip(page);
-	HPDF_Page_EndPath(page);
+	//HPDF_Page_EndPath(page);
 	return 0;
 }
 
@@ -618,6 +617,7 @@ int Emf2Pdf::FindFont(wchar_t* faceName, bool bold, bool italic)
 
 void Emf2Pdf::SetEncoding(unsigned char idx)
 {
+	return;
 	switch (idx)
 	{
 	case ANSI_CHARSET:			HPDF_SetCurrentEncoder(pdf, "WinAnsiEncoding"); break;
@@ -703,8 +703,7 @@ size_t Emf2Pdf::CreatePDFFont()
 		HPDF_Box bx = HPDF_Font_GetBBox(created[idx].font.font);
 		if (height < 0)
 		{
-			float totH = (HPDF_Font_GetAscent(created[idx].font.font) + HPDF_Font_GetDescent(created[idx].font.font)) / 1024.f;
-			created[idx].font.height = -height * totH * yScale;
+			created[idx].font.height = -height * yScale;
 		}
 		else
 		{
@@ -793,8 +792,19 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 
 	unsigned long* dx = (unsigned long*)malloc(sizeof(unsigned long)*nChar);
 	fread(dx, sizeof(unsigned long), nChar, f);  ret += sizeof(unsigned long)*nChar;
-	float ch = HPDF_Font_GetAscent(currentFont.font) * currentFont.height /1024;
-	float y = currHeight - pos.y * yScale - ch;
+	float y = currHeight - pos.y * yScale;
+	if ((textAlign & TA_BASELINE)!= TA_BASELINE)
+	{// baseline is the default for haru
+		if (textAlign & TA_BOTTOM)
+		{
+			y -= HPDF_Font_GetDescent(currentFont.font) * currentFont.height / 1024;
+		}
+		else
+		{
+
+			y -= HPDF_Font_GetAscent(currentFont.font) * currentFont.height / 1024;
+		}
+	}
 	float y0 = currHeight - rect.bottom*yScale;
 	float y1 = currHeight - rect.top*yScale;
 	char out[2]; out[1] = 0;
@@ -838,13 +848,44 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 size_t Emf2Pdf::BitBlt()
 {
 	RECTL bound;
+	//RECTL dest;
 	fread(&bound, 4, 4, f);
+	//fread(&dest, 4, 4, f);
 	printf("  %i,%i-%i,%i\r\n", bound.left, bound.top, bound.right, bound.bottom);
 	// always do a filled rectangle
 	HPDF_Page_Rectangle(page, bound.left* xScale, currHeight - bound.bottom * yScale,
 		(bound.right - bound.left) * xScale, (bound.bottom - bound.top) * yScale);
 	HPDF_Page_Fill(page);
+	//return 32;
 	return 16;
+}
+
+size_t Emf2Pdf::StretchDiBits()
+{
+	size_t ret = 0;
+	RECTL bound, src;
+	POINTL dest, destSize;
+	fread(&bound, 4, 4, f); ret += 16;
+	fread(&dest, 4, 2, f); ret += 8;
+	fread(&src, 4, 4, f); ret += 16;
+/*	unsigned int offHdr, dimHdr, offBits, dimBits, usage, oper;
+	fread(&offHdr, 4, 1, f); ret += 4; offHdr -= 8;
+	fread(&dimHdr, 4, 1, f); ret += 4;
+	fread(&offBits, 4, 1, f); ret += 4; offBits -= 8;
+	fread(&dimBits, 4, 1, f); ret += 4;
+	fread(&usage, 4, 1, f); ret += 4;
+	fread(&oper, 4, 1, f); ret += 4;
+	fread(&destSize, 4, 2, f); ret += 8;
+	if(usage!=0) return ret; //only RGB
+	if (oper != SRCCOPY) return ret; //only copy
+	if (offHdr + dimHdr > offBits) return ret;
+	if (ret < offHdr) {
+		fseek(f, offHdr - ret, SEEK_CUR);
+		ret = offHdr;
+	}
+	*/
+
+	return ret;
 }
 
 void Emf2Pdf::ParseFile()
@@ -880,6 +921,7 @@ void Emf2Pdf::ParseFile()
 		case EMR_EXTTEXTOUTA:			nRead += PDFTextOut(code); break;
 		case EMR_SETTEXTALIGN:			nRead += SetTextAlign(); break;
 		case EMR_BITBLT:				nRead += BitBlt(); break;
+		case EMR_STRETCHDIBITS:			nRead += StretchDiBits(); break;
 
 		}
 		fseek(f, (long)(size - nRead), SEEK_CUR);
@@ -987,8 +1029,8 @@ int main(int argc, const char* argv[])
 
 	/*/
 	const char *fileToOpen;
-	fileToOpen = "Rep01.emf"; 
-	fileToOpen = "261465000.emf";
+	fileToOpen = "test2.emf"; 
+	//fileToOpen = "261465000.emf";
 	if (argc > 1) fileToOpen = argv[1];
 	HPDF_Doc pdf = HPDF_New(0, 0);
 	Emf2Pdf conv(pdf);
