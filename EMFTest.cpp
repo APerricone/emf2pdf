@@ -236,6 +236,7 @@ private:
 	size_t SetTextAlign();
 	size_t BitBlt();
 	size_t StretchDiBits();
+	size_t Polygon(unsigned long code);
 
 	void ParseFile();
 };
@@ -585,6 +586,7 @@ size_t Emf2Pdf::CreateBrush()
 	fread(&g, 1, 1, f);
 	fread(&b, 1, 1, f);
 	fread(&x, 1, 1, f);
+	created[idx].brush.solid = true;
 	created[idx].brush.r = (float)r / 255.f;
 	created[idx].brush.g = (float)g / 255.f;
 	created[idx].brush.b = (float)b / 255.f;
@@ -710,6 +712,7 @@ size_t Emf2Pdf::CreatePDFFont()
 			float sc = (float)(a - d) / (float)(bx.top-bx.bottom);
 			created[idx].font.height = height * sc * yScale;
 		}
+		if (created[idx].font.height > 200) created[idx].font.height = 100;
 		HPDF_Page_SetFontAndSize(page, created[idx].font.font, created[idx].font.height);		
 		created[idx].font.width = 1;
 		if (width != 0)
@@ -888,6 +891,55 @@ size_t Emf2Pdf::StretchDiBits()
 	return ret;
 }
 
+size_t Emf2Pdf::Polygon(unsigned long code)
+{
+	size_t ret = 0;
+	RECTL bound;
+	fread(&bound, 4, 4, f); ret += 16;
+	unsigned long nPoint;
+	fread(&nPoint, 4, 1, f); ret += 4;
+	PRINT_DBG("  %i points\r\n", nPoint);
+	float startX, startY;
+	for (unsigned long i = 0; i < nPoint; i++)
+	{
+		float x, y;
+		if (code == EMR_POLYGON)
+		{
+			POINTL p;
+			fread(&p, 4, 2, f); ret += 8;
+			PRINT_DBG("  %i %i,%i\r\n", i, p.x, p.y);
+			x = p.x * xScale;
+			y = currHeight - p.y * yScale;
+		} else
+		{
+			POINTS p;
+			fread(&p, 2, 2, f); ret += 4;
+			PRINT_DBG("  %i %i,%i\r\n", i, p.x, p.y);
+			x = p.x * xScale;
+			y = currHeight - p.y * yScale;
+		}
+		if (i == 0) {
+			HPDF_Page_MoveTo(page, x, y);
+			startX = x;
+			startY = y;
+		} else HPDF_Page_LineTo(page, x, y);
+	}
+	HPDF_Page_LineTo(page, startX, startY);
+	if (currentPen.width > 0 && currentBrush.solid)
+	{
+		HPDF_Page_FillStroke(page);
+	}
+	else if (currentPen.width > 0)
+	{
+		HPDF_Page_Stroke(page);
+	}
+	else if (currentBrush.solid)
+	{
+		HPDF_Page_Fill(page);
+	}
+	return ret;
+}
+
 void Emf2Pdf::ParseFile()
 {
 	while (!feof(f))
@@ -922,7 +974,9 @@ void Emf2Pdf::ParseFile()
 		case EMR_SETTEXTALIGN:			nRead += SetTextAlign(); break;
 		case EMR_BITBLT:				nRead += BitBlt(); break;
 		case EMR_STRETCHDIBITS:			nRead += StretchDiBits(); break;
-
+		case EMR_POLYGON:				
+		case EMR_POLYGON16:				nRead += Polygon(code); break;
+		case EMR_EOF: return;
 		}
 		fseek(f, (long)(size - nRead), SEEK_CUR);
 		HPDF_STATUS err = HPDF_GetError(pdf);
@@ -1029,7 +1083,7 @@ int main(int argc, const char* argv[])
 
 	/*/
 	const char *fileToOpen;
-	fileToOpen = "test2.emf"; 
+	fileToOpen = "veryPDF.emf"; 
 	//fileToOpen = "261465000.emf";
 	if (argc > 1) fileToOpen = argv[1];
 	HPDF_Doc pdf = HPDF_New(0, 0);
