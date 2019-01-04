@@ -15,4 +15,6 @@
 #include <sysinfoapi.h>
 #include "hpdf.h"
 
+#include "Emf2Pdf.h"
+
 #endif //PCH_H
