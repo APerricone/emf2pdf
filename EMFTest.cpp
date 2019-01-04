@@ -229,6 +229,8 @@ private:
 	size_t CloseFigure();
 	size_t EndPath();
 	size_t FillPath();
+	size_t StrokePath();
+	size_t StrokeAndFillPath();
 	size_t SelectClipPath();
 	size_t SetPolyFillMode();
 	size_t CreatePDFFont();
@@ -396,6 +398,21 @@ size_t Emf2Pdf::FillPath()
 	return 0;
 }
 
+size_t Emf2Pdf::StrokePath()
+{
+	HPDF_Page_Stroke(page);
+	return 0;
+}
+
+size_t Emf2Pdf::StrokeAndFillPath()
+{
+	if (polyEO)
+		HPDF_Page_EofillStroke(page);
+	else
+		HPDF_Page_FillStroke(page);
+	return 0;
+}
+
 size_t Emf2Pdf::CloseFigure()
 {
 	if (currX != pathStartX || currY != pathStartY)
@@ -417,7 +434,8 @@ size_t Emf2Pdf::SelectClipPath()
 {
 	// only copy supported
 	//HPDF_Page_Clip(page);
-	//HPDF_Page_EndPath(page);
+	if(inPath || HPDF_Page_GetGMode(page)==2) 
+		HPDF_Page_EndPath(page);
 	return 0;
 }
 
@@ -871,7 +889,7 @@ size_t Emf2Pdf::StretchDiBits()
 	fread(&bound, 4, 4, f); ret += 16;
 	fread(&dest, 4, 2, f); ret += 8;
 	fread(&src, 4, 4, f); ret += 16;
-/*	unsigned int offHdr, dimHdr, offBits, dimBits, usage, oper;
+	unsigned int offHdr, dimHdr, offBits, dimBits, usage, oper;
 	fread(&offHdr, 4, 1, f); ret += 4; offHdr -= 8;
 	fread(&dimHdr, 4, 1, f); ret += 4;
 	fread(&offBits, 4, 1, f); ret += 4; offBits -= 8;
@@ -879,15 +897,158 @@ size_t Emf2Pdf::StretchDiBits()
 	fread(&usage, 4, 1, f); ret += 4;
 	fread(&oper, 4, 1, f); ret += 4;
 	fread(&destSize, 4, 2, f); ret += 8;
-	if(usage!=0) return ret; //only RGB
-	if (oper != SRCCOPY) return ret; //only copy
-	if (offHdr + dimHdr > offBits) return ret;
+	if (usage != 0) 
+		return ret; //only RGB
+	if (oper != SRCCOPY) 
+		return ret; //only copy
+	if (offHdr + dimHdr > offBits) 
+		return ret;
 	if (ret < offHdr) {
 		fseek(f, offHdr - ret, SEEK_CUR);
 		ret = offHdr;
 	}
-	*/
+	BITMAPINFOHEADER bmi;
+	bmi.biSize = 0;
+	if (dimHdr >= sizeof(BITMAPINFOHEADER))
+	{
+		fread(&bmi, sizeof(BITMAPINFOHEADER), 1, f); ret += sizeof(BITMAPINFOHEADER);
+	}
+	else
+		return ret;
+	if (bmi.biSize < sizeof(BITMAPINFOHEADER)) 
+		return ret;
+	//*/
+	RGBQUAD *palette = 0;
+	if (bmi.biClrUsed > 0)
+	{
+		if (bmi.biSize > sizeof(BITMAPINFOHEADER))
+		{
+			fseek(f, bmi.biSize - sizeof(BITMAPINFOHEADER), SEEK_CUR);
+			ret += bmi.biSize - sizeof(BITMAPINFOHEADER);
+		}
+		palette = (RGBQUAD*)(malloc(sizeof(RGBQUAD)*bmi.biClrUsed));
+		fread(palette, sizeof(RGBQUAD), bmi.biClrUsed, f);
+		ret += sizeof(RGBQUAD)*bmi.biClrUsed;
+	}
+	if (ret < offBits) {
+		fseek(f, offBits - ret, SEEK_CUR);
+		ret = offBits;
+	}
+	unsigned char *bits = (unsigned char*)malloc(dimBits);
+	fread(bits, 1, dimBits, f); ret += dimBits;
+	HPDF_Image img;
+	if (bmi.biCompression == BI_PNG)
+	{
+		img = HPDF_LoadPngImageFromMem(pdf, bits, dimBits);
+	}
+	else if (bmi.biCompression == BI_JPEG)
+	{
+		img = HPDF_LoadJpegImageFromMem(pdf, bits, dimBits);
+	}
+	else if (bmi.biCompression == BI_RGB)
+	{
+		HPDF_ColorSpace cs = (bmi.biBitCount < 16 ? HPDF_CS_DEVICE_GRAY : HPDF_CS_DEVICE_RGB);
+		HPDF_UINT nBit;
+		unsigned char* dest = bits, tmp, *src = bits, *newB;
+		unsigned long i;
+		switch (bmi.biBitCount)
+		{
+		case 1:
+			cs = HPDF_CS_DEVICE_GRAY;
+			nBit = 1;
+			break;
+		case 4:
+			if (bmi.biClrUsed > 0)
+			{
+				newB = (unsigned char*)malloc(bmi.biWidth*bmi.biHeight * 3);
+				dest = newB;
+				for (i = 0; i < bmi.biWidth*bmi.biHeight; i+=2, dest += 6, src += 1)
+				{
+					dest[0] = palette[(*src & 0x0F0)>>4].rgbRed;
+					dest[1] = palette[(*src & 0x0F0)>>4].rgbGreen;
+					dest[2] = palette[(*src & 0x0F0)>>4].rgbBlue;
+					dest[3] = palette[*src & 0x0F].rgbRed;
+					dest[4] = palette[*src & 0x0F].rgbGreen;
+					dest[5] = palette[*src & 0x0F].rgbBlue;
+				}
+				free(bits);
+				bits = newB;
+				cs = HPDF_CS_DEVICE_RGB;
+				nBit = 8;
+			}
+			else
+			{
+				if (palette) free(palette);
+				free(bits);
+				return ret;
+			}
+			break;
+		case 8:
+			if (bmi.biClrUsed > 0)
+			{
+				newB = (unsigned char*)malloc(bmi.biWidth*bmi.biHeight * 3);
+				dest = newB;
+				for (i = 0; i < bmi.biWidth*bmi.biHeight; i++, dest += 3, src+=1)
+				{
+					dest[0] = palette[*src].rgbRed;
+					dest[1] = palette[*src].rgbGreen;
+					dest[2] = palette[*src].rgbBlue;
+				}
+				free(bits);
+				bits = newB;
+				cs = HPDF_CS_DEVICE_RGB;
+				nBit = 8;
+			}
+			else
+			{
+				cs = HPDF_CS_DEVICE_GRAY;
+				nBit = 8;
+			}
+			break;
+		case 16:
+			if (palette) free(palette);
+			free(bits);
+			return ret;
+			break;
+		case 24:
+			cs = HPDF_CS_DEVICE_RGB;
+			nBit = 8;
+			for (i = 0; i < dimBits; i += 3, dest += 3)
+			{
+				tmp = dest[0];
+				dest[0] = dest[2];
+				dest[2] = tmp;
+			}
+			break;
+		case 32:
+			cs = HPDF_CS_DEVICE_RGB;
+			nBit = 8;
+			for (i = 0; i < dimBits; i += 3, dest += 3, src+=4)
+			{
+				tmp = src[0];
+				dest[0] = src[2];
+				dest[1] = src[1];
+				dest[2] = tmp;
+			}
+			break;
+		}
 
+		img = HPDF_LoadRawImageFromMem(pdf, bits, bmi.biWidth, bmi.biHeight,cs, nBit);
+	}
+	else {
+		if (palette) free(palette);
+		free(bits); 
+		return ret;
+	}
+	float x, y, w, h;
+	x = dest.x * xScale;
+	y = currHeight - dest.y * yScale;
+	w = destSize.x * xScale;
+	h = destSize.y * yScale;
+	HPDF_Page_DrawImage(page, img, x, y, w, -h);
+
+	if (palette) free(palette);
+	free(bits);
 	return ret;
 }
 
@@ -966,6 +1127,8 @@ void Emf2Pdf::ParseFile()
 		case EMR_CLOSEFIGURE:			nRead += CloseFigure(); break;
 		case EMR_ENDPATH:				nRead += EndPath(); break;
 		case EMR_FILLPATH:				nRead += FillPath(); break;
+		case EMR_STROKEPATH:			nRead += StrokePath(); break;
+		case EMR_STROKEANDFILLPATH:		nRead += StrokeAndFillPath(); break;
 		case EMR_SELECTCLIPPATH:		nRead += SelectClipPath(); break;
 		case EMR_SETPOLYFILLMODE:		nRead += SetPolyFillMode(); break;
 		case EMR_EXTCREATEFONTINDIRECTW:nRead += CreatePDFFont(); break;
@@ -1083,7 +1246,7 @@ int main(int argc, const char* argv[])
 
 	/*/
 	const char *fileToOpen;
-	fileToOpen = "veryPDF.emf"; 
+	fileToOpen = "tiger.emf"; 
 	//fileToOpen = "261465000.emf";
 	if (argc > 1) fileToOpen = argv[1];
 	HPDF_Doc pdf = HPDF_New(0, 0);
