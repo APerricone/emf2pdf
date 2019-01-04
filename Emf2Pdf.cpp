@@ -1,5 +1,8 @@
+#ifdef __HARBOUR__
+#include "Emf2Pdf.h"
+#else
 #include "pch.h"
-
+#endif
 //#define _CONSOLE_DEBUG
 #if defined(_CONSOLE_DEBUG)
 #define PRINT_DBG printf
@@ -144,6 +147,7 @@ Emf2Pdf::Emf2Pdf(HPDF_Doc pdf)
 {
 	this->pdf = pdf;
 	HPDF_SetCurrentEncoder(pdf, "WinAnsiEncoding");
+	created = 0;
 	Reset();
 }
 
@@ -822,8 +826,8 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 			y -= HPDF_Font_GetAscent(currentFont.font) * currentFont.height / 1024;
 		}
 	}
-	float y0 = currHeight - rect.bottom*yScale;
-	float y1 = currHeight - rect.top*yScale;
+	//float y0 = currHeight - rect.bottom*yScale;
+	//float y1 = currHeight - rect.top*yScale;
 	char out[2]; out[1] = 0;
 	float x = pos.x * xScale;
 	float endW;
@@ -869,7 +873,8 @@ size_t Emf2Pdf::StretchDiBits(unsigned long code)
 	size_t ret = 0;
 	POINTL dest, destSize;
 	fseek(f, 16, SEEK_CUR);  ret += 16;
-	unsigned int offHdr, dimHdr, offBits, dimBits, usage, oper;
+	unsigned int offHdr=0, dimHdr=0, offBits=0, dimBits=0, usage=0, oper=0;
+	dest.x=dest.y=destSize.x=destSize.y=0;
 	switch (code)
 	{
 	case EMR_BITBLT:
@@ -955,8 +960,8 @@ size_t Emf2Pdf::StretchDiBits(unsigned long code)
 	else if (bmi.biCompression == BI_RGB)
 	{
 		HPDF_ColorSpace cs = (bmi.biBitCount < 16 ? HPDF_CS_DEVICE_GRAY : HPDF_CS_DEVICE_RGB);
-		HPDF_UINT nBit;
-		unsigned char* dest = bits, tmp, *src = bits, *newB;
+		HPDF_UINT nBit=1;
+		unsigned char* destPtr = bits, tmp, *src = bits, *newB;
 		unsigned long i;
 		switch (bmi.biBitCount)
 		{
@@ -968,15 +973,15 @@ size_t Emf2Pdf::StretchDiBits(unsigned long code)
 			if (bmi.biClrUsed > 0)
 			{
 				newB = (unsigned char*)malloc(bmi.biWidth*bmi.biHeight * 3);
-				dest = newB;
-				for (i = 0; i < bmi.biWidth*bmi.biHeight; i += 2, dest += 6, src += 1)
+				destPtr = newB;
+				for (i = 0; i < (unsigned)(bmi.biWidth*bmi.biHeight); i += 2, destPtr += 6, src += 1)
 				{
-					dest[0] = palette[(*src & 0x0F0) >> 4].rgbRed;
-					dest[1] = palette[(*src & 0x0F0) >> 4].rgbGreen;
-					dest[2] = palette[(*src & 0x0F0) >> 4].rgbBlue;
-					dest[3] = palette[*src & 0x0F].rgbRed;
-					dest[4] = palette[*src & 0x0F].rgbGreen;
-					dest[5] = palette[*src & 0x0F].rgbBlue;
+					destPtr[0] = palette[(*src & 0x0F0) >> 4].rgbRed;
+					destPtr[1] = palette[(*src & 0x0F0) >> 4].rgbGreen;
+					destPtr[2] = palette[(*src & 0x0F0) >> 4].rgbBlue;
+					destPtr[3] = palette[*src & 0x0F].rgbRed;
+					destPtr[4] = palette[*src & 0x0F].rgbGreen;
+					destPtr[5] = palette[*src & 0x0F].rgbBlue;
 				}
 				free(bits);
 				bits = newB;
@@ -994,12 +999,12 @@ size_t Emf2Pdf::StretchDiBits(unsigned long code)
 			if (bmi.biClrUsed > 0)
 			{
 				newB = (unsigned char*)malloc(bmi.biWidth*bmi.biHeight * 3);
-				dest = newB;
-				for (i = 0; i < bmi.biWidth*bmi.biHeight; i++, dest += 3, src += 1)
+				destPtr = newB;
+				for (i = 0; i < (unsigned)(bmi.biWidth*bmi.biHeight); i++, destPtr += 3, src += 1)
 				{
-					dest[0] = palette[*src].rgbRed;
-					dest[1] = palette[*src].rgbGreen;
-					dest[2] = palette[*src].rgbBlue;
+					destPtr[0] = palette[*src].rgbRed;
+					destPtr[1] = palette[*src].rgbGreen;
+					destPtr[2] = palette[*src].rgbBlue;
 				}
 				free(bits);
 				bits = newB;
@@ -1020,22 +1025,22 @@ size_t Emf2Pdf::StretchDiBits(unsigned long code)
 		case 24:
 			cs = HPDF_CS_DEVICE_RGB;
 			nBit = 8;
-			for (i = 0; i < dimBits; i += 3, dest += 3)
+			for (i = 0; i < dimBits; i += 3, destPtr += 3)
 			{
-				tmp = dest[0];
-				dest[0] = dest[2];
-				dest[2] = tmp;
+				tmp = destPtr[0];
+				destPtr[0] = destPtr[2];
+				destPtr[2] = tmp;
 			}
 			break;
 		case 32:
 			cs = HPDF_CS_DEVICE_RGB;
 			nBit = 8;
-			for (i = 0; i < dimBits; i += 3, dest += 3, src += 4)
+			for (i = 0; i < dimBits; i += 3, destPtr += 3, src += 4)
 			{
 				tmp = src[0];
-				dest[0] = src[2];
-				dest[1] = src[1];
-				dest[2] = tmp;
+				destPtr[0] = src[2];
+				destPtr[1] = src[1];
+				destPtr[2] = tmp;
 			}
 			break;
 		}
@@ -1067,7 +1072,7 @@ size_t Emf2Pdf::Polygon(unsigned long code)
 	unsigned long nPoint;
 	fread(&nPoint, 4, 1, f); ret += 4;
 	PRINT_DBG("  %i points\r\n", nPoint);
-	float startX, startY;
+	float startX=0, startY=0;
 	for (unsigned long i = 0; i < nPoint; i++)
 	{
 		float x, y;
@@ -1202,7 +1207,6 @@ bool Emf2Pdf::AddEMF(const char* cFileName)
 #else
 	f = fopen(cFileName, "rb");
 #endif
-	HPDF_Doc pdf = HPDF_New(0, 0);
 	if (!f)
 	{
 		PRINT_DBG("File not found %s", cFileName);
@@ -1269,17 +1273,18 @@ void Emf2Pdf::InitInstalledFont()
 #ifdef __HARBOUR__
 
 #include <hbapi.h>
+#include <hbhpdf.h>
 
-HB_FUNC(AddEMF) // pdf (Pointer), cEMFFIle (stringa)
+HB_FUNC(HPDF_ADDEMF) // pdf (Pointer), cEMFFIle (stringa)
 {
-	HPDF_Doc pdf = hb_parptr(1);
+	HPDF_Doc pdf = hb_HPDF_Doc_par(1);
 	if (pdf == 0)
 	{
 		hb_ret();
 		return;
 	}
 	Emf2Pdf conv(pdf);
-	conv.AddEMF(hb_parstr(2));
+	conv.AddEMF(hb_parc(2));
 	hb_ret();
 }
 

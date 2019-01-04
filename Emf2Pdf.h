@@ -1,5 +1,9 @@
 #pragma once
 
+#include <stdio.h>
+#include <hpdf.h>
+#include <windows.h>
+
 class Emf2Pdf
 {
 public:
