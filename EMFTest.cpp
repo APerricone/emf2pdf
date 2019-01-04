@@ -132,7 +132,7 @@ const char* emfNames[] = {
 	"EMR_RESERVED_117", /*117*/
 #endif // (_WIN32_WINNT >= _WIN32_WINNT_WIN2K)
 	"EMR_GRADIENTFILL", /*118*/
-	"EMR_RESERVED_119", /*119*/
+	"EMR_SETLINKEDUFIS", /*119*/
 	"EMR_RESERVED_120", /*120*/
 	"EMR_COLORMATCHTOTARGETW", /*121*/
 	"EMR_CREATECOLORSPACEW", /*122*/
@@ -162,6 +162,7 @@ private:
 	static SystemFont* installedFont;
 	static void InitInstalledFont();
 	static int FindFont(wchar_t* faceName, bool bold, bool italic);
+	const char *GetEncoding(unsigned char idx);
 	void SetEncoding(unsigned char idx);
 
 	struct Font
@@ -236,8 +237,7 @@ private:
 	size_t CreatePDFFont();
 	size_t PDFTextOut(unsigned long code);
 	size_t SetTextAlign();
-	size_t BitBlt();
-	size_t StretchDiBits();
+	size_t StretchDiBits(unsigned long code);
 	size_t Polygon(unsigned long code);
 
 	void ParseFile();
@@ -304,6 +304,7 @@ size_t Emf2Pdf::Header()
 	scale = xScale > yScale ? xScale : yScale;
 	nRead += 32+sizeof(SIZEL);
 	currHeight = HPDF_Page_GetHeight(page);
+	HPDF_Page_SetFontAndSize(page, HPDF_GetFont(pdf, "Helvetica", 0), 12);
 	return nRead;
 }
 
@@ -635,31 +636,38 @@ int Emf2Pdf::FindFont(wchar_t* faceName, bool bold, bool italic)
 	return -1;
 }
 
-void Emf2Pdf::SetEncoding(unsigned char idx)
+const char *Emf2Pdf::GetEncoding(unsigned char idx)
 {
-	return;
 	switch (idx)
 	{
-	case ANSI_CHARSET:			HPDF_SetCurrentEncoder(pdf, "WinAnsiEncoding"); break;
-	case DEFAULT_CHARSET:		HPDF_SetCurrentEncoder(pdf, "StandardEncoding"); break;
+	case ANSI_CHARSET:			return ("WinAnsiEncoding"); break;
+	case DEFAULT_CHARSET:		return ("StandardEncoding"); break;
 	case SYMBOL_CHARSET:		break;
-	case MAC_CHARSET:			HPDF_SetCurrentEncoder(pdf, "MacRomanEncoding"); break;
-	case SHIFTJIS_CHARSET:		HPDF_SetCurrentEncoder(pdf, "90ms-RKSJ-H"); break;
-	case HANGUL_CHARSET:		HPDF_SetCurrentEncoder(pdf, "KSCms-UHC-H"); break;
+	case MAC_CHARSET:			return ("MacRomanEncoding"); break;
+	case SHIFTJIS_CHARSET:		return ("90ms-RKSJ-H"); break;
+	case HANGUL_CHARSET:		return ("KSCms-UHC-H"); break;
 	case JOHAB_CHARSET:			break;
 	case GB2312_CHARSET:		break;
 	case CHINESEBIG5_CHARSET:	break;
-	case GREEK_CHARSET:			HPDF_SetCurrentEncoder(pdf, "CP1253"); break;
-	case TURKISH_CHARSET:		HPDF_SetCurrentEncoder(pdf, "CP1254"); break;
-	case VIETNAMESE_CHARSET:	HPDF_SetCurrentEncoder(pdf, "CP1258"); break;
-	case HEBREW_CHARSET:		HPDF_SetCurrentEncoder(pdf, "CP1255"); break;
-	case ARABIC_CHARSET:		HPDF_SetCurrentEncoder(pdf, "CP1256"); break;
-	case BALTIC_CHARSET:		HPDF_SetCurrentEncoder(pdf, "CP1257"); break;
-	case RUSSIAN_CHARSET:		HPDF_SetCurrentEncoder(pdf, "KOI8-R"); break;
-	case THAI_CHARSET:	 		HPDF_SetCurrentEncoder(pdf, "ISO8859-11"); break;
+	case GREEK_CHARSET:			return ("CP1253"); break;
+	case TURKISH_CHARSET:		return ("CP1254"); break;
+	case VIETNAMESE_CHARSET:	return ("CP1258"); break;
+	case HEBREW_CHARSET:		return ("CP1255"); break;
+	case ARABIC_CHARSET:		return ("CP1256"); break;
+	case BALTIC_CHARSET:		return ("CP1257"); break;
+	case RUSSIAN_CHARSET:		return ("KOI8-R"); break;
+	case THAI_CHARSET:	 		return ("ISO8859-11"); break;
 	case EASTEUROPE_CHARSET:	break;
 	case OEM_CHARSET:			break;
 	}
+	return 0;
+}
+
+void Emf2Pdf::SetEncoding(unsigned char idx)
+{
+	const char *name = GetEncoding(idx);
+	if (name)
+		HPDF_SetCurrentEncoder(pdf, name);
 }
 
 size_t Emf2Pdf::CreatePDFFont()
@@ -718,7 +726,7 @@ size_t Emf2Pdf::CreatePDFFont()
 	{
 		created[idx].type = OBJ_FONT;
 		const char* loaded = HPDF_LoadTTFontFromFile(pdf, installedFont[i].path, false);
-		created[idx].font.font = HPDF_GetFont(pdf, loaded, 0);
+		created[idx].font.font = HPDF_GetFont(pdf, loaded, GetEncoding(encoding));
 		HPDF_INT a = HPDF_Font_GetAscent(created[idx].font.font), d = HPDF_Font_GetDescent(created[idx].font.font);
 		HPDF_Box bx = HPDF_Font_GetBBox(created[idx].font.font);
 		if (height < 0)
@@ -866,41 +874,50 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 	return ret;
 }
 
-size_t Emf2Pdf::BitBlt()
-{
-	RECTL bound;
-	//RECTL dest;
-	fread(&bound, 4, 4, f);
-	//fread(&dest, 4, 4, f);
-	printf("  %i,%i-%i,%i\r\n", bound.left, bound.top, bound.right, bound.bottom);
-	// always do a filled rectangle
-	HPDF_Page_Rectangle(page, bound.left* xScale, currHeight - bound.bottom * yScale,
-		(bound.right - bound.left) * xScale, (bound.bottom - bound.top) * yScale);
-	HPDF_Page_Fill(page);
-	//return 32;
-	return 16;
-}
-
-size_t Emf2Pdf::StretchDiBits()
+size_t Emf2Pdf::StretchDiBits(unsigned long code)
 {
 	size_t ret = 0;
-	RECTL bound, src;
 	POINTL dest, destSize;
-	fread(&bound, 4, 4, f); ret += 16;
-	fread(&dest, 4, 2, f); ret += 8;
-	fread(&src, 4, 4, f); ret += 16;
+	fseek(f, 16, SEEK_CUR);  ret += 16;
 	unsigned int offHdr, dimHdr, offBits, dimBits, usage, oper;
-	fread(&offHdr, 4, 1, f); ret += 4; offHdr -= 8;
-	fread(&dimHdr, 4, 1, f); ret += 4;
-	fread(&offBits, 4, 1, f); ret += 4; offBits -= 8;
-	fread(&dimBits, 4, 1, f); ret += 4;
-	fread(&usage, 4, 1, f); ret += 4;
-	fread(&oper, 4, 1, f); ret += 4;
-	fread(&destSize, 4, 2, f); ret += 8;
-	if (usage != 0) 
-		return ret; //only RGB
-	if (oper != SRCCOPY) 
-		return ret; //only copy
+	switch (code)
+	{
+	case EMR_BITBLT:
+		fread(&dest, 4, 2, f); ret += 8;
+		fread(&destSize, 4, 2, f); ret += 8;
+		fread(&oper, 4, 1, f); ret += 4;
+		fseek(f, 28, SEEK_CUR);  ret += 28;
+		fread(&usage, 4, 1, f); ret += 4;
+		fread(&offHdr, 4, 1, f); ret += 4; offHdr -= 8;
+		fread(&dimHdr, 4, 1, f); ret += 4;
+		fread(&offBits, 4, 1, f); ret += 4; offBits -= 8;
+		fread(&dimBits, 4, 1, f); ret += 4;
+		break;
+	case EMR_STRETCHDIBITS:
+		fread(&dest, 4, 2, f); ret += 8;
+		fseek(f, 16, SEEK_CUR);  ret += 16;
+		fread(&offHdr, 4, 1, f); ret += 4; offHdr -= 8;
+		fread(&dimHdr, 4, 1, f); ret += 4;
+		fread(&offBits, 4, 1, f); ret += 4; offBits -= 8;
+		fread(&dimBits, 4, 1, f); ret += 4;
+		fread(&usage, 4, 1, f); ret += 4;
+		fread(&oper, 4, 1, f); ret += 4;
+		fread(&destSize, 4, 2, f); ret += 8;
+		break;
+	}
+	if(dimHdr==0 || dimBits==0)
+	{
+		float x, y, w, h;
+		x = dest.x * xScale;
+		y = currHeight - (dest.y+destSize.y) * yScale;
+		w = destSize.x * xScale;
+		h = destSize.y * yScale;
+		HPDF_Page_Rectangle(page, x,y,w,h);
+		HPDF_Page_Fill(page);
+		return ret;
+	}
+	if (usage != 0) return ret; //only RGB
+	//if (oper != SRCCOPY) 	return ret; //only copy
 	if (offHdr + dimHdr > offBits) 
 		return ret;
 	if (ret < offHdr) {
@@ -1048,7 +1065,7 @@ size_t Emf2Pdf::StretchDiBits()
 	HPDF_Page_DrawImage(page, img, x, y, w, -h);
 
 	if (palette) free(palette);
-	free(bits);
+	//free(bits);
 	return ret;
 }
 
@@ -1135,8 +1152,8 @@ void Emf2Pdf::ParseFile()
 		case EMR_EXTTEXTOUTW:
 		case EMR_EXTTEXTOUTA:			nRead += PDFTextOut(code); break;
 		case EMR_SETTEXTALIGN:			nRead += SetTextAlign(); break;
-		case EMR_BITBLT:				nRead += BitBlt(); break;
-		case EMR_STRETCHDIBITS:			nRead += StretchDiBits(); break;
+		case EMR_BITBLT:				
+		case EMR_STRETCHDIBITS:			nRead += StretchDiBits(code); break;
 		case EMR_POLYGON:				
 		case EMR_POLYGON16:				nRead += Polygon(code); break;
 		case EMR_EOF: return;
@@ -1246,8 +1263,7 @@ int main(int argc, const char* argv[])
 
 	/*/
 	const char *fileToOpen;
-	fileToOpen = "tiger.emf"; 
-	//fileToOpen = "261465000.emf";
+	fileToOpen = "test3.emf"; 
 	if (argc > 1) fileToOpen = argv[1];
 	HPDF_Doc pdf = HPDF_New(0, 0);
 	Emf2Pdf conv(pdf);
