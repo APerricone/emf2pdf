@@ -177,6 +177,10 @@ private:
 	struct Pen
 	{
 		float width, r, g, b;
+		WORD dash[8];
+		UINT nDash;
+		unsigned char join;
+		unsigned char end;
 	};
 
 	struct Brush
@@ -239,6 +243,7 @@ private:
 	size_t SetTextAlign();
 	size_t StretchDiBits(unsigned long code);
 	size_t Polygon(unsigned long code);
+	size_t Ellipse();
 
 	void ParseFile();
 };
@@ -266,8 +271,12 @@ void Emf2Pdf::Reset()
 	currentFont.width = 1;
 	currentFont.fakeBold = currentFont.fakeItalic = false;
 	currentPen.r = currentPen.g = currentPen.b = 0.f;
+	currentPen.width = 1;
+	currentPen.nDash = 0;
+	currentPen.join = HPDF_ROUND_JOIN;
+	currentPen.end = HPDF_ROUND_END;
 	currentBrush.solid = true;
-	currentBrush.r = currentBrush.g = currentBrush.b = 0.f;
+	currentBrush.r = currentBrush.g = currentBrush.b = 1.f;
 	textAlign = 0;
 	rText = gText = bText = 0.f;
 	polyEO = false;
@@ -304,6 +313,14 @@ size_t Emf2Pdf::Header()
 	scale = xScale > yScale ? xScale : yScale;
 	nRead += 32+sizeof(SIZEL);
 	currHeight = HPDF_Page_GetHeight(page);
+
+
+	HPDF_Page_SetLineWidth(page, 1);
+	HPDF_Page_SetRGBStroke(page, 0,0,0);
+	HPDF_Page_SetDash(page, 0, 0, 0);
+	HPDF_Page_SetLineCap(page, HPDF_ROUND_END);
+	HPDF_Page_SetLineJoin(page, HPDF_ROUND_JOIN);
+	HPDF_Page_SetRGBFill(page, 1,1,1);
 	HPDF_Page_SetFontAndSize(page, HPDF_GetFont(pdf, "Helvetica", 0), 12);
 	return nRead;
 }
@@ -479,14 +496,26 @@ size_t Emf2Pdf::SelectObject()
 		case WHITE_PEN:
 			currentPen.width = 1*scale;
 			currentPen.r = currentPen.g = currentPen.b = 1.f;
+			currentPen.nDash = 0;
+			currentPen.join = HPDF_ROUND_JOIN;
+			currentPen.end = HPDF_ROUND_END;
 			HPDF_Page_SetLineWidth(page, currentPen.width*scale);
 			HPDF_Page_SetRGBStroke(page, currentPen.r, currentPen.g, currentPen.b);
+			HPDF_Page_SetDash(page, 0, 0, 0);
+			HPDF_Page_SetLineCap(page, (HPDF_LineCap)currentPen.end);
+			HPDF_Page_SetLineJoin(page, (HPDF_LineJoin)currentPen.join);
 			break;
 		case BLACK_PEN:
 			currentPen.width = 1 * scale;
 			currentPen.r = currentPen.g = currentPen.b = 0.f;
+			currentPen.nDash = 0;
+			currentPen.join = HPDF_ROUND_JOIN;
+			currentPen.end = HPDF_ROUND_END;
 			HPDF_Page_SetLineWidth(page, currentPen.width*scale);
 			HPDF_Page_SetRGBStroke(page, currentPen.r, currentPen.g, currentPen.b);
+			HPDF_Page_SetDash(page, 0, 0, 0);
+			HPDF_Page_SetLineCap(page, (HPDF_LineCap)currentPen.end);
+			HPDF_Page_SetLineJoin(page, (HPDF_LineJoin)currentPen.join);
 			break;
 		case NULL_PEN:
 			currentPen.width = 0;
@@ -517,8 +546,16 @@ size_t Emf2Pdf::SelectObject()
 				currentPen.r = itm.pen.r;
 				currentPen.g = itm.pen.g;
 				currentPen.b = itm.pen.b;
+				currentPen.nDash = itm.pen.nDash;
+				if (currentPen.nDash > 0)
+					memcpy(currentPen.dash, itm.pen.dash, 2 * itm.pen.nDash);
+				currentPen.end = itm.pen.end;
+				currentPen.join = itm.pen.join;
 				HPDF_Page_SetLineWidth(page, currentPen.width);
 				HPDF_Page_SetRGBStroke(page, currentPen.r, currentPen.g, currentPen.b);
+				HPDF_Page_SetDash(page, (const HPDF_UINT16*)currentPen.dash, currentPen.nDash,0);
+				HPDF_Page_SetLineCap(page, (HPDF_LineCap)currentPen.end);
+				HPDF_Page_SetLineJoin(page, (HPDF_LineJoin)currentPen.join);
 				break;
 			case OBJ_BRUSH:
 				currentBrush.solid = itm.brush.solid;
@@ -575,11 +612,11 @@ size_t Emf2Pdf::CreatePen()
 	fread(&idx, 4, 1, f);
 	SetCreatedIdx(idx);
 	created[idx].type = OBJ_PEN;
-	unsigned long style,width;
+	unsigned long style, width,h;
 	fread(&style, 4, 1, f); // temp: ignore
 	fread(&width, 4, 1, f); // width
 	created[idx].pen.width = scale * width;
-	fread(&style, 4, 1, f); // to ignore
+	fread(&h, 4, 1, f); // to ignore
 	unsigned char r, g, b, x;
 	fread(&r, 1, 1, f);
 	fread(&g, 1, 1, f);
@@ -588,7 +625,65 @@ size_t Emf2Pdf::CreatePen()
 	created[idx].pen.r = (float)r / 255.f;
 	created[idx].pen.g = (float)g / 255.f;
 	created[idx].pen.b = (float)b / 255.f;
-	PRINT_DBG("  width %i rgb %i %i %i\r\n", width,r,g,b);
+	PRINT_DBG("  width %i rgb %i %i %i\r\n", width, r, g, b);
+	created[idx].pen.nDash = 0;
+	switch (style&PS_STYLE_MASK)
+	{
+	case PS_SOLID:
+		created[idx].pen.nDash = 0;
+		break;
+	case PS_DASH:
+		created[idx].pen.dash[0] = 5;
+		created[idx].pen.nDash = 1;
+		break;
+	case PS_DOT:
+		created[idx].pen.dash[0] = 2;
+		created[idx].pen.nDash = 1;
+		break;
+	case PS_DASHDOT:
+		created[idx].pen.dash[0] = 5;
+		created[idx].pen.dash[1] = 3;
+		created[idx].pen.dash[2] = 1;
+		created[idx].pen.dash[3] = 3;
+		created[idx].pen.nDash = 4;
+		break;
+	case PS_DASHDOTDOT:
+		created[idx].pen.dash[0] = 5;
+		created[idx].pen.dash[1] = 3;
+		created[idx].pen.dash[2] = 1;
+		created[idx].pen.dash[3] = 3;
+		created[idx].pen.dash[4] = 1;
+		created[idx].pen.dash[5] = 3;
+		created[idx].pen.nDash = 6;
+		break;
+	case PS_NULL:
+		created[idx].pen.width = 0;
+		break;
+	}
+	switch (style & PS_ENDCAP_MASK)
+	{
+	case PS_ENDCAP_ROUND:
+		created[idx].pen.end = HPDF_ROUND_END;
+		break;
+	case PS_ENDCAP_SQUARE:
+		created[idx].pen.end = HPDF_PROJECTING_SCUARE_END;
+		break;
+	case PS_ENDCAP_FLAT:
+		created[idx].pen.end = HPDF_BUTT_END;
+		break;
+	}
+	switch (style & PS_JOIN_MASK)
+	{
+	case PS_JOIN_ROUND:
+		created[idx].pen.join = HPDF_ROUND_JOIN;
+		break;
+	case PS_JOIN_BEVEL:
+		created[idx].pen.join = HPDF_BEVEL_JOIN;
+		break;
+	case PS_JOIN_MITER:
+		created[idx].pen.join = HPDF_MITER_JOIN;
+		break;
+	}
 	return 20;
 }
 
@@ -1065,7 +1160,7 @@ size_t Emf2Pdf::StretchDiBits(unsigned long code)
 	HPDF_Page_DrawImage(page, img, x, y, w, -h);
 
 	if (palette) free(palette);
-	//free(bits);
+	free(bits);
 	return ret;
 }
 
@@ -1118,6 +1213,33 @@ size_t Emf2Pdf::Polygon(unsigned long code)
 	return ret;
 }
 
+size_t Emf2Pdf::Ellipse()
+{
+	RECTL bound;
+	fread(&bound, 4, 4, f);
+	float x = (bound.right + bound.left) * xScale / 2;
+	float y = currHeight - (bound.top+ bound.bottom) * xScale / 2;
+	float rx = (bound.right - bound.left) * xScale / 2;
+	float ry = (bound.bottom - bound.top) * yScale / 2;
+	HPDF_Page_Ellipse(page, x, y, rx, ry);
+
+	if (currentPen.width > 0 && currentBrush.solid)
+	{
+		HPDF_Page_FillStroke(page);
+	}
+	else if (currentPen.width > 0)
+	{
+		HPDF_Page_Stroke(page);
+	}
+	else if (currentBrush.solid)
+	{
+		HPDF_Page_Fill(page);
+	}
+
+	return 16;
+}
+
+
 void Emf2Pdf::ParseFile()
 {
 	while (!feof(f))
@@ -1156,6 +1278,7 @@ void Emf2Pdf::ParseFile()
 		case EMR_STRETCHDIBITS:			nRead += StretchDiBits(code); break;
 		case EMR_POLYGON:				
 		case EMR_POLYGON16:				nRead += Polygon(code); break;
+		case EMR_ELLIPSE:				nRead += Ellipse(); break;
 		case EMR_EOF: return;
 		}
 		fseek(f, (long)(size - nRead), SEEK_CUR);
@@ -1263,7 +1386,7 @@ int main(int argc, const char* argv[])
 
 	/*/
 	const char *fileToOpen;
-	fileToOpen = "test3.emf"; 
+	fileToOpen = "mandala.emf"; 
 	if (argc > 1) fileToOpen = argv[1];
 	HPDF_Doc pdf = HPDF_New(0, 0);
 	Emf2Pdf conv(pdf);
