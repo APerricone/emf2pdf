@@ -1,6 +1,6 @@
 // EMFTest.cpp : Questo file contiene la funzione 'main', in cui inizia e termina l'esecuzione del programma.
 //
-#include "pch.h"
+#include "Emf2Pdf.h"
 
 int main(int argc, const char* argv[])
 {/*

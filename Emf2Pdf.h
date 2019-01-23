@@ -32,6 +32,8 @@ private:
 		float height, width;
 		bool fakeBold;
 		bool fakeItalic;
+		bool underline;
+		bool strike;
 		unsigned char encoding;
 	};
 
@@ -108,5 +110,3 @@ private:
 
 	void ParseFile();
 };
-
-
