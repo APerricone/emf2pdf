@@ -1,6 +1,6 @@
 #include "Emf2Pdf.h"
 
-//#define _CONSOLE_DEBUG
+#define _CONSOLE_DEBUG
 #if defined(_CONSOLE_DEBUG)
 #define PRINT_DBG printf
 const char* emfNames[] = {
@@ -686,7 +686,11 @@ size_t Emf2Pdf::CreatePDFFont()
 	while (*tl) *tl++ = towlower(*tl);
 	bool bold = weight > 550, italic = cItalic > 0;
 	bool fakeBold = false, fakeItalic = false;
-	PRINT_DBG("  %S %s%s%ix%i\r\n", faceName, bold ? "bold " : "", italic ? "italic " : "", height, width);
+	PRINT_DBG("  \"%S\" %s%s%ix%i\r\n", faceName, bold ? "bold " : "", italic ? "italic " : "", height, width);
+	if (wcscmp(faceName, L"code ean13") == 0)
+	{
+		wcscpy_s<32>(faceName, L"ean-13");
+	}
 	int i = FindFont(faceName, bold, italic);
 	if (i < 0)
 	{
@@ -720,18 +724,19 @@ size_t Emf2Pdf::CreatePDFFont()
 		created[idx].type = OBJ_FONT;
 		const char* loaded = HPDF_LoadTTFontFromFile(pdf, installedFont[i].path, false);
 		created[idx].font.font = HPDF_GetFont(pdf, loaded, GetEncoding(encoding));
-		HPDF_INT a = HPDF_Font_GetAscent(created[idx].font.font), d = HPDF_Font_GetDescent(created[idx].font.font);
-		HPDF_Box bx = HPDF_Font_GetBBox(created[idx].font.font);
 		if (height < 0)
 		{
 			created[idx].font.height = -height * yScale;
 		}
 		else
 		{
+			HPDF_INT a = HPDF_Font_GetAscent(created[idx].font.font), d = HPDF_Font_GetDescent(created[idx].font.font);
+			HPDF_Box bx = HPDF_Font_GetBBox(created[idx].font.font);
 			float sc = (float)(a - d) / (float)(bx.top - bx.bottom);
+			if (sc == 0) sc = 1;
 			created[idx].font.height = height * sc * yScale;
 		}
-		if (created[idx].font.height > 200) created[idx].font.height = 100;
+		if (created[idx].font.height > 100) created[idx].font.height = 100;
 		HPDF_Page_SetFontAndSize(page, created[idx].font.font, created[idx].font.height);
 		created[idx].font.width = 1;
 		if (width != 0)
@@ -801,7 +806,7 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 		fread(str, 1, nChar, f); ret += nChar;
 		ll = strlen(str);
 	}
-	if (dxOff > ret) fseek(f, dxOff - ret, SEEK_CUR); ret = dxOff;
+	if (dxOff > ret) fseek(f, (long)(dxOff - ret), SEEK_CUR); ret = dxOff;
 	PRINT_DBG("  %i,%i -> %s\r\n", pos.x, pos.y, str);
 	if (ll <= 0) return ret;
 	HPDF_Page_BeginText(page);
@@ -831,16 +836,16 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 	//float y0 = currHeight - rect.bottom*yScale;
 	//float y1 = currHeight - rect.top*yScale;
 	char out[2]; out[1] = 0;
-	float startX, endX;
+	float startX=rect.right * xScale, endX =rect.left * xScale;
 	float x = pos.x * xScale;
 	float endW;
 	if (textAlign & TA_RIGHT)
-	{		
+	{
 		if (opts & ETO_CLIPPED) x = rect.right * xScale;
 		endX = x+ HPDF_Font_GetUnicodeWidth(currentFont.font, str[ll-1])  * size / 1000;
 		endW = -1e20f;
 		if (opts & ETO_CLIPPED) endW = rect.left * xScale;
-		for (int i = ll - 1, j = nChar - 1; i >= 0; i--, j--)
+		for (int i = (int)(ll - 1), j = nChar - 1; i >= 0; i--, j--)
 		{
 			out[0] = str[i];
 			x -= dx[j] * xScale;
@@ -942,7 +947,7 @@ size_t Emf2Pdf::StretchDiBits(unsigned long code)
 	if (offHdr + dimHdr > offBits)
 		return ret;
 	if (ret < offHdr) {
-		fseek(f, offHdr - ret, SEEK_CUR);
+		fseek(f, (long)(offHdr - ret), SEEK_CUR);
 		ret = offHdr;
 	}
 	BITMAPINFOHEADER bmi;
@@ -969,7 +974,7 @@ size_t Emf2Pdf::StretchDiBits(unsigned long code)
 		ret += sizeof(RGBQUAD)*bmi.biClrUsed;
 	}
 	if (ret < offBits) {
-		fseek(f, offBits - ret, SEEK_CUR);
+		fseek(f, (long)(offBits - ret), SEEK_CUR);
 		ret = offBits;
 	}
 	unsigned char *bits = (unsigned char*)malloc(dimBits);
