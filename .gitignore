@@ -1,0 +1,8 @@
+*.user
+v15
+Debug
+Release
+include
+libharu-*
+tests
+*.lib
