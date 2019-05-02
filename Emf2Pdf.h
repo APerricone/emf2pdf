@@ -78,6 +78,8 @@ private:
 	Brush currentBrush;
 	DWORD textAlign;
 	float rText, gText, bText;
+	float rTextBck, gTextBck, bTextBck;
+	bool textBKOpaque;
 	FILE *f;
 	boolean polyEO;
 
@@ -107,6 +109,8 @@ private:
 	size_t StretchDiBits(unsigned long code);
 	size_t Polygon(unsigned long code);
 	size_t Ellipse();
+	size_t SetBkColor();
+	size_t SetBkMode ();
 
 	void ParseFile();
 };

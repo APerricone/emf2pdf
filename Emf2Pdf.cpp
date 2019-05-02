@@ -173,6 +173,8 @@ void Emf2Pdf::Reset()
 	currentBrush.r = currentBrush.g = currentBrush.b = 1.f;
 	textAlign = 0;
 	rText = gText = bText = 0.f;
+	rTextBck = gTextBck = bTextBck = 1.f;
+	textBKOpaque = false;
 	polyEO = false;
 }
 
@@ -486,6 +488,29 @@ size_t Emf2Pdf::SetTextColor()
 	gText = (float)g / 255.f;
 	bText = (float)b / 255.f;
 	PRINT_DBG("  color %i %i %i\r\n", r, g, b);
+	return 4;
+}
+
+size_t Emf2Pdf::SetBkColor()
+{
+	unsigned char r, g, b, x;
+	fread(&r, 1, 1, f);
+	fread(&g, 1, 1, f);
+	fread(&b, 1, 1, f);
+	fread(&x, 1, 1, f);
+	rTextBck = (float)r / 255.f;
+	gTextBck = (float)g / 255.f;
+	bTextBck = (float)b / 255.f;
+	PRINT_DBG("  color %i %i %i\r\n", r, g, b);
+	return 4;
+}
+
+size_t Emf2Pdf::SetBkMode()
+{
+	long v;
+	fread(&v, 4, 1, f);
+	PRINT_DBG("  mode %s\r\n", v==1?"Transparent" : "Opaque");
+	textBKOpaque = v != 1;
 	return 4;
 }
 
@@ -809,18 +834,14 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 	if (dxOff > ret) fseek(f, (long)(dxOff - ret), SEEK_CUR); ret = dxOff;
 	PRINT_DBG("  %i,%i -> %s\r\n", pos.x, pos.y, str);
 	if (ll <= 0) return ret;
-	HPDF_Page_BeginText(page);
-	HPDF_Page_SetRGBFill(page, rText, gText, bText);
-	HPDF_Page_SetRGBStroke(page, rText, gText, bText);
-	float size = HPDF_Page_GetCurrentFontSize(page);
-	HPDF_Page_SetLineWidth(page, size / 20.f);
-	if (currentFont.fakeBold)
-		HPDF_Page_SetTextRenderingMode(page, HPDF_FILL_THEN_STROKE);
-	HPDF_Page_SetTextMatrix(page, currentFont.width, 0, currentFont.width * nItalic, 1, 0, 0);
-
 	unsigned long* dx = (unsigned long*)malloc(sizeof(unsigned long)*nChar);
 	fread(dx, sizeof(unsigned long), nChar, f);  ret += sizeof(unsigned long)*nChar;
+	char out[2]; out[1] = 0;
+	float startX = rect.right * xScale, endX = rect.left * xScale;
+	float x = pos.x * xScale;
+	float endW;
 	float y = currHeight - pos.y * yScale;
+	float size = HPDF_Page_GetCurrentFontSize(page);
 	if ((textAlign & TA_BASELINE) != TA_BASELINE)
 	{// baseline is the default for haru
 		if (textAlign & TA_BOTTOM)
@@ -833,52 +854,73 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 			y -= HPDF_Font_GetAscent(currentFont.font) * size / 1024;
 		}
 	}
-	//float y0 = currHeight - rect.bottom*yScale;
-	//float y1 = currHeight - rect.top*yScale;
-	char out[2]; out[1] = 0;
-	float startX=rect.right * xScale, endX =rect.left * xScale;
-	float x = pos.x * xScale;
-	float endW;
-	if (textAlign & TA_RIGHT)
+
+	for (int step = 0; step < 2; step++)
 	{
-		if (opts & ETO_CLIPPED) x = rect.right * xScale;
-		endX = x+ HPDF_Font_GetUnicodeWidth(currentFont.font, str[ll-1])  * size / 1000;
-		endW = -1e20f;
-		if (opts & ETO_CLIPPED) endW = rect.left * xScale;
-		for (int i = (int)(ll - 1), j = nChar - 1; i >= 0; i--, j--)
+		if (step == 0 && !textBKOpaque)
+			continue;
+		if (step == 0)
 		{
-			out[0] = str[i];
-			x -= dx[j] * xScale;
-			HPDF_Page_TextOut(page, x, y, out);
-			if (x < endW)
-				break;
+			HPDF_Page_SetRGBFill(page, rTextBck, gTextBck, bTextBck);
 		}
-		startX = x;
-	}
-	else if (textAlign & TA_CENTER)
-	{
-		//TODO
-	}
-	else
-	{
-		if (opts & ETO_CLIPPED) x = rect.left * xScale;
-		startX = x;
-		endW = 1e20f;
-		if (opts & ETO_CLIPPED) endW = rect.right * xScale;
-		unsigned int i;
-		for (i = 0; i < nChar && i < ll; i++)
+		else
 		{
-			out[0] = str[i];
-			HPDF_Page_TextOut(page, x, y, out);
-			x += dx[i] * xScale;
-			if (x > endW)
+			HPDF_Page_BeginText(page);
+			HPDF_Page_SetRGBFill(page, rText, gText, bText);
+			HPDF_Page_SetRGBStroke(page, rText, gText, bText);
+			HPDF_Page_SetLineWidth(page, size / 20.f);
+			if (currentFont.fakeBold)
+				HPDF_Page_SetTextRenderingMode(page, HPDF_FILL_THEN_STROKE);
+			HPDF_Page_SetTextMatrix(page, currentFont.width, 0, currentFont.width * nItalic, 1, 0, 0);
+		}
+		startX = rect.right * xScale, endX = rect.left * xScale;
+		x = pos.x * xScale;
+		if (textAlign & TA_RIGHT)
+		{
+			if (opts & ETO_CLIPPED) x = rect.right * xScale;
+			endX = x + HPDF_Font_GetUnicodeWidth(currentFont.font, str[ll - 1])  * size / 1000;
+			endW = -1e20f;
+			if (opts & ETO_CLIPPED) endW = rect.left * xScale;
+			for (int i = (int)(ll - 1), j = nChar - 1; i >= 0; i--, j--)
 			{
-				x-= dx[i] * xScale;
-				i += 1;
-				break;
+				out[0] = str[i];
+				x -= dx[j] * xScale;
+				if(step ==1) HPDF_Page_TextOut(page, x, y, out);
+				if (x < endW)
+					break;
 			}
+			startX = x;
 		}
-		endX = x; // +HPDF_Font_GetUnicodeWidth(currentFont.font, str[i - 1])  * currentFont.height / 1000;
+		else if (textAlign & TA_CENTER)
+		{
+			//TODO
+		}
+		else
+		{
+			if (opts & ETO_CLIPPED) x = rect.left * xScale;
+			startX = x;
+			endW = 1e20f;
+			if (opts & ETO_CLIPPED) endW = rect.right * xScale;
+			unsigned int i;
+			for (i = 0; i < nChar && i < ll; i++)
+			{
+				out[0] = str[i];
+				if (step == 1) HPDF_Page_TextOut(page, x, y, out);
+				x += dx[i] * xScale;
+				if (x > endW)
+				{
+					x -= dx[i] * xScale;
+					i += 1;
+					break;
+				}
+			}
+			endX = x; // +HPDF_Font_GetUnicodeWidth(currentFont.font, str[i - 1])  * currentFont.height / 1000;
+		}
+		if (step == 0)
+		{
+			HPDF_Page_Rectangle(page, startX, y - size *0.2f, (endX-startX), size * 1.2f );
+			HPDF_Page_Fill(page);
+		}
 	}
 	free(str);
 	free(dx);
@@ -933,13 +975,16 @@ size_t Emf2Pdf::StretchDiBits(unsigned long code)
 	}
 	if (dimHdr == 0 || dimBits == 0)
 	{
-		float x, y, w, h;
-		x = dest.x * xScale;
-		y = currHeight - (dest.y + destSize.y) * yScale;
-		w = destSize.x * xScale;
-		h = destSize.y * yScale;
-		HPDF_Page_Rectangle(page, x, y, w, h);
-		HPDF_Page_Fill(page);
+		if (currentBrush.solid)
+		{
+			float x, y, w, h;
+			x = dest.x * xScale;
+			y = currHeight - (dest.y + destSize.y) * yScale;
+			w = destSize.x * xScale;
+			h = destSize.y * yScale;
+			HPDF_Page_Rectangle(page, x, y, w, h);
+			HPDF_Page_Fill(page);	
+		}
 		return ret;
 	}
 	if (usage != 0) return ret; //only RGB
@@ -1212,6 +1257,8 @@ void Emf2Pdf::ParseFile()
 		case EMR_POLYGON:
 		case EMR_POLYGON16:				nRead += Polygon(code); break;
 		case EMR_ELLIPSE:				nRead += Ellipse(); break;
+		case EMR_SETBKCOLOR:			nRead += SetBkColor(); break;
+		case EMR_SETBKMODE:				nRead += SetBkMode(); break;
 		case EMR_EOF: return;
 		}
 		fseek(f, (long)(size - nRead), SEEK_CUR);
