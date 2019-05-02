@@ -857,9 +857,9 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 
 	for (int step = 0; step < 2; step++)
 	{
-		if (step == 0 && !textBKOpaque)
+		if (step == 0 && !textBKOpaque && !(textAlign & TA_CENTER))
 			continue;
-		if (step == 0)
+		if (step == 0 && textBKOpaque)
 		{
 			HPDF_Page_SetRGBFill(page, rTextBck, gTextBck, bTextBck);
 		}
@@ -891,9 +891,22 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 			}
 			startX = x;
 		}
-		else if (textAlign & TA_CENTER)
+		else if((textAlign & TA_CENTER) && (step==1))
 		{
-			//TODO
+			x = startX;
+			unsigned int i;
+			for (i = 0; i < nChar && i < ll; i++)
+			{
+				out[0] = str[i];
+				if (step == 1) HPDF_Page_TextOut(page, x, y, out);
+				x += dx[i] * xScale;
+				if (x > endW)
+				{
+					x -= dx[i] * xScale;
+					i += 1;
+					break;
+				}
+			}
 		}
 		else
 		{
@@ -916,7 +929,11 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 			}
 			endX = x; // +HPDF_Font_GetUnicodeWidth(currentFont.font, str[i - 1])  * currentFont.height / 1000;
 		}
-		if (step == 0)
+		if (step == 0 && (textAlign & TA_CENTER))
+		{
+			startX = (endX + startX) / 2;
+		}
+		if (step == 0 && textBKOpaque)
 		{
 			HPDF_Page_Rectangle(page, startX, y - size *0.2f, (endX-startX), size * 1.2f );
 			HPDF_Page_Fill(page);
