@@ -1212,6 +1212,7 @@ size_t Emf2Pdf::Ellipse()
 {
 	RECTL bound;
 	fread(&bound, 4, 4, f);
+	PRINT_DBG("  (%ix%i)-(%ix%i) \r\n", bound.right, bound.bottom, bound.left, bound.top);
 	float x = (bound.right + bound.left) * xScale / 2;
 	float y = currHeight - (bound.top + bound.bottom) * xScale / 2;
 	float rx = (bound.right - bound.left) * xScale / 2;
@@ -1233,6 +1234,36 @@ size_t Emf2Pdf::Ellipse()
 
 	return 16;
 }
+
+size_t Emf2Pdf::Rectangle()
+{
+	RECTL bound;
+	fread(&bound, 4, 4, f);
+	PRINT_DBG("  (%ix%i)-(%ix%i) \r\n", bound.right, bound.bottom, bound.left, bound.top);
+	float x = bound.left * xScale;
+	float y = currHeight - bound.bottom * yScale;
+	float rx = (bound.right - bound.left) * xScale;
+	float ry = (bound.bottom - bound.top) * yScale;
+
+	HPDF_Page_Rectangle(page, x, y, rx, ry);
+
+
+	if (currentPen.width > 0 && currentBrush.solid)
+	{
+		HPDF_Page_FillStroke(page);
+	}
+	else if (currentPen.width > 0)
+	{
+		HPDF_Page_Stroke(page);
+	}
+	else if (currentBrush.solid)
+	{
+		HPDF_Page_Fill(page);
+	}
+
+	return 16;
+}
+
 
 
 void Emf2Pdf::ParseFile()
@@ -1276,6 +1307,7 @@ void Emf2Pdf::ParseFile()
 		case EMR_ELLIPSE:				nRead += Ellipse(); break;
 		case EMR_SETBKCOLOR:			nRead += SetBkColor(); break;
 		case EMR_SETBKMODE:				nRead += SetBkMode(); break;
+		case EMR_RECTANGLE:				nRead += Rectangle(); break;			
 		case EMR_EOF: return;
 		}
 		fseek(f, (long)(size - nRead), SEEK_CUR);

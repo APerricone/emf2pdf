@@ -110,7 +110,8 @@ private:
 	size_t Polygon(unsigned long code);
 	size_t Ellipse();
 	size_t SetBkColor();
-	size_t SetBkMode ();
+	size_t SetBkMode();
+	size_t Rectangle();
 
 	void ParseFile();
 };
