@@ -547,7 +547,7 @@ size_t Emf2Pdf::CreatePen()
 	created[idx].pen.r = (float)r / 255.f;
 	created[idx].pen.g = (float)g / 255.f;
 	created[idx].pen.b = (float)b / 255.f;
-	PRINT_DBG("  width %i rgb %i %i %i\r\n", width, r, g, b);
+	PRINT_DBG("  %i width %i rgb %i %i %i\r\n", idx, width, r, g, b);
 	created[idx].pen.nDash = 0;
 	switch (style&PS_STYLE_MASK)
 	{
@@ -626,7 +626,7 @@ size_t Emf2Pdf::CreateBrush()
 	created[idx].brush.r = (float)r / 255.f;
 	created[idx].brush.g = (float)g / 255.f;
 	created[idx].brush.b = (float)b / 255.f;
-	PRINT_DBG("  rgb %i %i %i\r\n", r, g, b);
+	PRINT_DBG("  %i rgb %i %i %i\r\n", idx, r, g, b);
 	return 12;
 }
 
@@ -955,6 +955,13 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 	}
 	if (currentFont.strike || currentFont.underline)
 		HPDF_Page_Stroke(page);
+
+	HPDF_Page_SetLineWidth(page, currentPen.width);
+	HPDF_Page_SetRGBStroke(page, currentPen.r, currentPen.g, currentPen.b);
+	HPDF_Page_SetDash(page, (const HPDF_UINT16*)currentPen.dash, currentPen.nDash, 0);
+	HPDF_Page_SetLineCap(page, (HPDF_LineCap)currentPen.end);
+	HPDF_Page_SetLineJoin(page, (HPDF_LineJoin)currentPen.join);
+	HPDF_Page_SetRGBFill(page, currentBrush.r, currentBrush.g, currentBrush.b);
 	return ret;
 }
 
@@ -1242,11 +1249,10 @@ size_t Emf2Pdf::Rectangle()
 	PRINT_DBG("  (%ix%i)-(%ix%i) \r\n", bound.right, bound.bottom, bound.left, bound.top);
 	float x = bound.left * xScale;
 	float y = currHeight - bound.bottom * yScale;
-	float rx = (bound.right - bound.left) * xScale;
-	float ry = (bound.bottom - bound.top) * yScale;
+	float w = (bound.right - bound.left) * xScale;
+	float h = (bound.bottom - bound.top) * yScale;
 
-	HPDF_Page_Rectangle(page, x, y, rx, ry);
-
+	HPDF_Page_Rectangle(page, x, y, w, h);
 
 	if (currentPen.width > 0 && currentBrush.solid)
 	{
