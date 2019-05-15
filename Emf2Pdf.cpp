@@ -1282,6 +1282,46 @@ size_t Emf2Pdf::Rectangle()
 	return 16;
 }
 
+size_t Emf2Pdf::RoundRectangle()
+{
+	RECTL bound;
+	SIZEL corner;
+	fread(&bound, 4, 4, f);
+	fread(&corner, 4, 2, f);
+	PRINT_DBG("  (%ix%i)-(%ix%i) \r\n", bound.right, bound.bottom, bound.left, bound.top);
+	float l = bound.left * xScale;
+	float t = currHeight - bound.bottom * yScale;
+	float r = bound.right  * xScale;
+	float b = currHeight - bound.top * yScale;
+	float rx = corner.cx * xScale / 2;
+	float ry = corner.cy * yScale / 2;
+
+	HPDF_Page_MoveTo(page, l + rx, t);
+	HPDF_Page_LineTo(page, r - rx, t); // top line
+	HPDF_Page_CurveTo(page, r - rx / 2, t, r, t + ry / 2, r, t + ry);
+	HPDF_Page_LineTo(page, r, b - ry); //right line
+	HPDF_Page_CurveTo(page, r, b - ry / 2, r - rx / 2, b, r - rx, b);
+	HPDF_Page_LineTo(page, l + rx, b); // bottom line
+	HPDF_Page_CurveTo(page, l + rx / 2, b, l, b - ry / 2, l, b - ry);
+	HPDF_Page_LineTo(page, l, t + ry); // left line
+	HPDF_Page_CurveTo(page, l, t + ry / 2, l + rx / 2, t, l + rx, t);
+
+	if (currentPen.width > 0 && currentBrush.solid)
+	{
+		HPDF_Page_FillStroke(page);
+	}
+	else if (currentPen.width > 0)
+	{
+		HPDF_Page_Stroke(page);
+	}
+	else if (currentBrush.solid)
+	{
+		HPDF_Page_Fill(page);
+	}
+
+	return 24;
+}
+
 
 
 void Emf2Pdf::ParseFile()
@@ -1325,7 +1365,8 @@ void Emf2Pdf::ParseFile()
 		case EMR_ELLIPSE:				nRead += Ellipse(); break;
 		case EMR_SETBKCOLOR:			nRead += SetBkColor(); break;
 		case EMR_SETBKMODE:				nRead += SetBkMode(); break;
-		case EMR_RECTANGLE:				nRead += Rectangle(); break;			
+		case EMR_RECTANGLE:				nRead += Rectangle(); break;
+		case EMR_ROUNDRECT:				nRead += RoundRectangle(); break;
 		case EMR_EOF: return;
 		}
 		fseek(f, (long)(size - nRead), SEEK_CUR);

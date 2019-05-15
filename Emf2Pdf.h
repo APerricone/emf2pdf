@@ -112,6 +112,7 @@ private:
 	size_t SetBkColor();
 	size_t SetBkMode();
 	size_t Rectangle();
+	size_t RoundRectangle();
 
 	void ParseFile();
 };
