@@ -1,6 +1,7 @@
+#include <locale.h>  
 #include "Emf2Pdf.h"
 
-#define _CONSOLE_DEBUG
+//#define _CONSOLE_DEBUG
 #if defined(_CONSOLE_DEBUG)
 #define PRINT_DBG printf
 const char* emfNames[] = {
@@ -657,7 +658,6 @@ const char *Emf2Pdf::GetEncoding(unsigned char idx)
 {
 	switch (idx)
 	{
-	case ANSI_CHARSET:			return ("WinAnsiEncoding"); break;
 	case DEFAULT_CHARSET:		return ("StandardEncoding"); break;
 	case SYMBOL_CHARSET:		break;
 	case MAC_CHARSET:			return ("MacRomanEncoding"); break;
@@ -666,16 +666,19 @@ const char *Emf2Pdf::GetEncoding(unsigned char idx)
 	case JOHAB_CHARSET:			break;
 	case GB2312_CHARSET:		break;
 	case CHINESEBIG5_CHARSET:	break;
-	case GREEK_CHARSET:			return ("CP1253"); break;
-	case TURKISH_CHARSET:		return ("CP1254"); break;
-	case VIETNAMESE_CHARSET:	return ("CP1258"); break;
-	case HEBREW_CHARSET:		return ("CP1255"); break;
-	case ARABIC_CHARSET:		return ("CP1256"); break;
-	case BALTIC_CHARSET:		return ("CP1257"); break;
-	case RUSSIAN_CHARSET:		return ("KOI8-R"); break;
 	case THAI_CHARSET:	 		return ("ISO8859-11"); break;
-	case EASTEUROPE_CHARSET:	break;
 	case OEM_CHARSET:			break;
+	case EASTEUROPE_CHARSET:	return "CP1250"; //Microsoft Windows Codepage 1250 (EE)
+	case RUSSIAN_CHARSET:		return "CP1251"; //Microsoft Windows Codepage 1251 (Cyrl)
+	//case RUSSIAN_CHARSET:		return ("KOI8-R"); break;
+	case ANSI_CHARSET:			return "CP1252"; //Microsoft Windows Codepage 1252 (ANSI)
+	case GREEK_CHARSET:			return "CP1253"; //Microsoft Windows Codepage 1253 (Greek)
+	case TURKISH_CHARSET:		return "CP1254"; //Microsoft Windows Codepage 1254 (Turk)
+	case HEBREW_CHARSET:		return "CP1255"; //Microsoft Windows Codepage 1255 (Hebr)
+	case ARABIC_CHARSET:		return "CP1256"; //Microsoft Windows Codepage 1256 (Arab)
+	case BALTIC_CHARSET:		return "CP1257"; //Microsoft Windows Codepage 1257 (BaltRim)
+	case VIETNAMESE_CHARSET:	return "CP1258"; //Microsoft Windows Codepage 1258 (Viet)
+
 	}
 	return 0;
 }
@@ -684,7 +687,16 @@ void Emf2Pdf::SetEncoding(unsigned char idx)
 {
 	const char *name = GetEncoding(idx);
 	if (name)
+	{
 		HPDF_SetCurrentEncoder(pdf, name);
+		if (memcmp(name, "CP", 2) == 0)
+		{ //TEMP: Do it better
+			char tmp[10];
+			strcpy(tmp, name + 1);
+			*tmp = '.';
+			setlocale(LC_ALL, tmp);
+		}
+	}
 }
 
 size_t Emf2Pdf::CreatePDFFont()
@@ -822,7 +834,7 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 		wchar_t *strw = (wchar_t*)malloc(sizeof(wchar_t)*(nChar + 1));
 		strw[nChar] = 0;
 		fread(strw, sizeof(wchar_t), nChar, f);  ret += sizeof(wchar_t)*nChar;
-		wcstombs_s(&ll, str, nChar + 1, strw, nChar + 1);
+		wcstombs_s(&ll, str, nChar +1, strw, nChar + 1);
 		free(strw);
 		ll -= 1;
 	}
@@ -833,13 +845,13 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 	}
 	if (dxOff > ret) fseek(f, (long)(dxOff - ret), SEEK_CUR); ret = dxOff;
 	PRINT_DBG("  %i,%i -> %s\r\n", pos.x, pos.y, str);
-	if (ll <= 0) return ret;
+	if ((signed)ll <= 0) return ret;
 	unsigned long* dx = (unsigned long*)malloc(sizeof(unsigned long)*nChar);
 	fread(dx, sizeof(unsigned long), nChar, f);  ret += sizeof(unsigned long)*nChar;
 	char out[2]; out[1] = 0;
 	float startX = rect.right * xScale, endX = rect.left * xScale;
 	float x = pos.x * xScale;
-	float endW;
+	float endW = 1e20f;
 	float y = currHeight - pos.y * yScale;
 	float size = HPDF_Page_GetCurrentFontSize(page);
 	if ((textAlign & TA_BASELINE) != TA_BASELINE)
