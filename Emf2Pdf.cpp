@@ -1,7 +1,7 @@
 #include <locale.h>  
 #include "Emf2Pdf.h"
 
-//#define _CONSOLE_DEBUG
+#define _CONSOLE_DEBUG
 #if defined(_CONSOLE_DEBUG)
 #define PRINT_DBG printf
 const char* emfNames[] = {
@@ -869,7 +869,7 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 
 	for (int step = 0; step < 2; step++)
 	{
-		if (step == 0 && !textBKOpaque && !(textAlign & TA_CENTER))
+		if (step == 0 && !textBKOpaque && (textAlign & TA_CENTER)!= TA_CENTER)
 			continue;
 		if (step == 0 && textBKOpaque)
 		{
@@ -887,7 +887,7 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 		}
 		startX = rect.right * xScale, endX = rect.left * xScale;
 		x = pos.x * xScale;
-		if (textAlign & TA_RIGHT)
+		if ((textAlign & TA_RIGHT)==TA_RIGHT)
 		{
 			if (opts & ETO_CLIPPED) x = rect.right * xScale;
 			endX = x + HPDF_Font_GetUnicodeWidth(currentFont.font, str[ll - 1])  * size / 1000;
@@ -903,7 +903,7 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 			}
 			startX = x;
 		}
-		else if((textAlign & TA_CENTER) && (step==1))
+		else if((textAlign & TA_CENTER)==TA_CENTER && (step==1))
 		{
 			x = startX;
 			unsigned int i;
@@ -941,7 +941,7 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 			}
 			endX = x; // +HPDF_Font_GetUnicodeWidth(currentFont.font, str[i - 1])  * currentFont.height / 1000;
 		}
-		if (step == 0 && (textAlign & TA_CENTER))
+		if (step == 0 && (textAlign & TA_CENTER)==TA_CENTER)
 		{
 			startX = (endX + startX) / 2;
 		}
@@ -1373,7 +1373,7 @@ void Emf2Pdf::ParseFile()
 		HPDF_STATUS err = HPDF_GetError(pdf);
 		if (err != HPDF_OK)
 		{
-			PRINT_DBG("HaruPDF Error 0x%4X (gMode 0x%04X)", err, page ? HPDF_Page_GetGMode(page) : 0);
+			PRINT_DBG("HaruPDF Error 0x%4X (gMode 0x%04X)\r\n", err, page ? HPDF_Page_GetGMode(page) : 0);
 			return;
 		}
 	}
