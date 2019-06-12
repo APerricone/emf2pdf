@@ -1,7 +1,7 @@
 #include <locale.h>  
 #include "Emf2Pdf.h"
 
-#define _CONSOLE_DEBUG
+//#define _CONSOLE_DEBUG
 #if defined(_CONSOLE_DEBUG)
 #define PRINT_DBG printf
 const char* emfNames[] = {
