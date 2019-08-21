@@ -12,7 +12,8 @@ public:
 	~Emf2Pdf();
 
 	bool AddEMF(const char* cFileName);
-
+	
+	bool embedFont;
 private:
 	struct SystemFont
 	{
@@ -23,7 +24,7 @@ private:
 	static SystemFont* installedFont;
 	static void InitInstalledFont();
 	static int FindFont(wchar_t* faceName, bool bold, bool italic);
-	const char *GetEncoding(unsigned char idx);
+	static const char *GetEncoding(unsigned char idx);
 	void SetEncoding(unsigned char idx);
 
 	struct Font
@@ -35,6 +36,7 @@ private:
 		bool underline;
 		bool strike;
 		unsigned char encoding;
+		int intalledIdx;
 	};
 
 	struct Pen
@@ -73,7 +75,7 @@ private:
 	float currX, currY;
 	bool inPath;
 	float pathStartX, pathStartY;
-	Font currentFont;
+	Font* currentFont;
 	Pen currentPen;
 	Brush currentBrush;
 	DWORD textAlign;

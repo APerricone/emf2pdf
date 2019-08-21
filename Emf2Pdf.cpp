@@ -1,4 +1,4 @@
-#include <locale.h>  
+﻿#include <locale.h>  
 #include "Emf2Pdf.h"
 
 //#define _CONSOLE_DEBUG
@@ -144,8 +144,10 @@ const char* emfNames[] = {
 Emf2Pdf::Emf2Pdf(HPDF_Doc pdf)
 {
 	this->pdf = pdf;
-	HPDF_SetCurrentEncoder(pdf, "WinAnsiEncoding");
+	HPDF_UseUTFEncodings(pdf);
+	HPDF_SetCurrentEncoder(pdf, "UTF-8");
 	created = 0;
+	this->embedFont = true;
 	Reset();
 }
 
@@ -160,11 +162,13 @@ void Emf2Pdf::Reset()
 	created = 0;
 	nCreated = 0;
 	currX = currY = 0;
-	currentFont.font = HPDF_GetFont(pdf, "Helvetica", 0);
+	currentFont = 0; 
+	/*currentFont.font = HPDF_GetFont(pdf, "Helvetica", 0);
 	currentFont.height = 14;
 	currentFont.width = 1;
 	currentFont.fakeBold = currentFont.fakeItalic = false;
 	currentFont.underline = currentFont.strike = false;
+	*/
 	currentPen.r = currentPen.g = currentPen.b = 0.f;
 	currentPen.width = 1;
 	currentPen.nDash = 0;
@@ -463,14 +467,8 @@ size_t Emf2Pdf::SelectObject()
 				HPDF_Page_SetRGBFill(page, currentBrush.r, currentBrush.g, currentBrush.b);
 				break;
 			case OBJ_FONT:
-				currentFont.font = itm.font.font;
-				currentFont.height = itm.font.height;
-				currentFont.width = itm.font.width;
-				currentFont.fakeBold = itm.font.fakeBold;
-				currentFont.fakeItalic = itm.font.fakeItalic;
-				currentFont.underline = itm.font.underline;
-				currentFont.strike = itm.font.strike;
-				HPDF_Page_SetFontAndSize(page, currentFont.font, currentFont.height);
+				currentFont = &itm.font;
+				HPDF_Page_SetFontAndSize(page, currentFont->font, currentFont->height);
 				SetEncoding(itm.font.encoding);
 			}
 		}
@@ -658,7 +656,7 @@ const char *Emf2Pdf::GetEncoding(unsigned char idx)
 {
 	switch (idx)
 	{
-	case DEFAULT_CHARSET:		return ("StandardEncoding"); break;
+	case DEFAULT_CHARSET:		return ("UTF-8"); break;
 	case SYMBOL_CHARSET:		break;
 	case MAC_CHARSET:			return ("MacRomanEncoding"); break;
 	case SHIFTJIS_CHARSET:		return ("90ms-RKSJ-H"); break;
@@ -759,7 +757,7 @@ size_t Emf2Pdf::CreatePDFFont()
 	if (i >= 0)
 	{
 		created[idx].type = OBJ_FONT;
-		const char* loaded = HPDF_LoadTTFontFromFile(pdf, installedFont[i].path, false);
+		const char* loaded = HPDF_LoadTTFontFromFile(pdf, installedFont[i].path, this->embedFont);
 		created[idx].font.font = HPDF_GetFont(pdf, loaded, GetEncoding(encoding));
 		if (height < 0)
 		{
@@ -789,6 +787,7 @@ size_t Emf2Pdf::CreatePDFFont()
 		created[idx].font.underline = underline == 1;
 		created[idx].font.strike = strikeOut == 1;
 		created[idx].font.encoding = encoding;
+		created[idx].font.intalledIdx = i;
 	}
 	else
 	{
@@ -807,6 +806,7 @@ size_t Emf2Pdf::SetTextAlign()
 
 size_t Emf2Pdf::PDFTextOut(unsigned long code)
 {
+	if (currentFont == 0) return 0;
 	size_t ret = 20;
 	fseek(f, 16, SEEK_CUR); //bound and graphics mode
 	unsigned long gm;
@@ -816,7 +816,7 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 	fread(&font_yScale, 4, 1, f); ret += 4;
 	POINTL pos;
 	fread(&pos, 8, 1, f); ret += 8;
-	float nItalic = currentFont.fakeItalic ? 0.333f : 0;
+	float nItalic = currentFont->fakeItalic ? 0.333f : 0;
 	unsigned long nChar, strOff, dxOff;
 	RECTL rect;
 	fread(&nChar, 4, 1, f); ret += 4;
@@ -834,7 +834,26 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 		wchar_t *strw = (wchar_t*)malloc(sizeof(wchar_t)*(nChar + 1));
 		strw[nChar] = 0;
 		fread(strw, sizeof(wchar_t), nChar, f);  ret += sizeof(wchar_t)*nChar;
-		wcstombs_s(&ll, str, nChar +1, strw, nChar + 1);
+		int utf16len = wcslen(strw);
+		wcstombs_s(&ll, str, nChar + 1, strw, nChar + 1);
+		if (ll <= 1 && utf16len > 0) {
+			//memcpy(strw, L"ñÑáéíóúñÑáéíóúñÑáéíóúñÑáéíóú", nChar*2); test with 2 byte unicode... works
+			//strw[nChar] = 0;
+			int utf8len = WideCharToMultiByte(CP_UTF8, 0, strw, utf16len, NULL, 0, NULL, NULL);
+			free(str);
+			str = (char*)malloc(sizeof(char)*(utf8len + 1));
+			str[utf8len] = 0;
+			wcstombs_s(&ll, str, nChar + 1, strw, nChar + 1);
+			ll = WideCharToMultiByte(CP_UTF8, 0, strw, utf16len, str, utf8len, 0, 0);
+			if (currentFont->encoding != 1)
+			{
+				currentFont->encoding = 1;
+				const char* loaded = HPDF_LoadTTFontFromFile(pdf, installedFont[currentFont->intalledIdx].path, this->embedFont);
+				currentFont->font = HPDF_GetFont(pdf, loaded, GetEncoding(currentFont->encoding));
+				HPDF_Page_SetFontAndSize(page, currentFont->font, currentFont->height);
+				SetEncoding(currentFont->encoding);
+			}
+		}
 		free(strw);
 		ll -= 1;
 	}
@@ -848,22 +867,24 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 	if ((signed)ll <= 0) return ret;
 	unsigned long* dx = (unsigned long*)malloc(sizeof(unsigned long)*nChar);
 	fread(dx, sizeof(unsigned long), nChar, f);  ret += sizeof(unsigned long)*nChar;
-	char out[2]; out[1] = 0;
+	char out[5]; memset(out, 0, 5);
 	float startX = rect.right * xScale, endX = rect.left * xScale;
 	float x = pos.x * xScale;
 	float endW = 1e20f;
 	float y = currHeight - pos.y * yScale;
 	float size = HPDF_Page_GetCurrentFontSize(page);
+		unsigned int i,n,j;
+		float d;
 	if ((textAlign & TA_BASELINE) != TA_BASELINE)
 	{// baseline is the default for haru
 		if (textAlign & TA_BOTTOM)
 		{
-			y -= HPDF_Font_GetDescent(currentFont.font) * size / 1024;
+			y -= HPDF_Font_GetDescent(currentFont->font) * size / 1024;
 		}
 		else
 		{
 
-			y -= HPDF_Font_GetAscent(currentFont.font) * size / 1024;
+			y -= HPDF_Font_GetAscent(currentFont->font) * size / 1024;
 		}
 	}
 
@@ -881,20 +902,21 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 			HPDF_Page_SetRGBFill(page, rText, gText, bText);
 			HPDF_Page_SetRGBStroke(page, rText, gText, bText);
 			HPDF_Page_SetLineWidth(page, size / 20.f);
-			if (currentFont.fakeBold)
+			if (currentFont->fakeBold)
 				HPDF_Page_SetTextRenderingMode(page, HPDF_FILL_THEN_STROKE);
-			HPDF_Page_SetTextMatrix(page, currentFont.width, 0, currentFont.width * nItalic, 1, 0, 0);
+			HPDF_Page_SetTextMatrix(page, currentFont->width, 0, currentFont->width * nItalic, 1, 0, 0);
 		}
 		startX = rect.right * xScale, endX = rect.left * xScale;
 		x = pos.x * xScale;
 		if ((textAlign & TA_RIGHT)==TA_RIGHT)
 		{
 			if (opts & ETO_CLIPPED) x = rect.right * xScale;
-			endX = x + HPDF_Font_GetUnicodeWidth(currentFont.font, str[ll - 1])  * size / 1000;
+			endX = x + HPDF_Font_GetUnicodeWidth(currentFont->font, str[ll - 1])  * size / 1000;
 			endW = -1e20f;
 			if (opts & ETO_CLIPPED) endW = rect.left * xScale;
 			for (int i = (int)(ll - 1), j = nChar - 1; i >= 0; i--, j--)
 			{
+				//TODO: unicode!
 				out[0] = str[i];
 				x -= dx[j] * xScale;
 				if(step ==1) HPDF_Page_TextOut(page, x, y, out);
@@ -906,12 +928,19 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 		else if((textAlign & TA_CENTER)==TA_CENTER && (step==1))
 		{
 			x = startX;
-			unsigned int i;
 			for (i = 0; i < nChar && i < ll; i++)
 			{
-				out[0] = str[i];
+				d = 0;
+				j = (unsigned char)str[i];
+				if (j >= 0b11110000) n = 4; else
+				if (j >= 0b11100000) n = 3; else
+				if (j >= 0b11000000) n = 2; else n = 1;
+				for (j = 0; j < n; j++, i++) {
+					out[j] = str[i];
+					d += dx[i];
+				}
 				if (step == 1) HPDF_Page_TextOut(page, x, y, out);
-				x += dx[i] * xScale;
+				x += d * xScale;
 				if (x > endW)
 				{
 					x -= dx[i] * xScale;
@@ -926,12 +955,23 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 			startX = x;
 			endW = 1e20f;
 			if (opts & ETO_CLIPPED) endW = rect.right * xScale;
-			unsigned int i;
+			//if (step == 1) HPDF_Page_TextOut(page, x, y, str);
+			
 			for (i = 0; i < nChar && i < ll; i++)
 			{
-				out[0] = str[i];
+				d = 0;
+				j = (unsigned char)str[i];
+				if (j >= 0b11110000) n = 4; else
+				if (j >= 0b11100000) n = 3; else
+				if (j >= 0b11000000) n = 2; else n = 1;
+				for (j = 0; j < n; j++, i++) {
+					out[j] = str[i];
+					d += dx[i];
+				}
+				out[n] = 0;
+				i--;
 				if (step == 1) HPDF_Page_TextOut(page, x, y, out);
-				x += dx[i] * xScale;
+				x += d * xScale;
 				if (x > endW)
 				{
 					x -= dx[i] * xScale;
@@ -939,7 +979,7 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 					break;
 				}
 			}
-			endX = x; // +HPDF_Font_GetUnicodeWidth(currentFont.font, str[i - 1])  * currentFont.height / 1000;
+			endX = x; // +HPDF_Font_GetUnicodeWidth(currentFont->font, str[i - 1])  * currentFont->height / 1000;
 		}
 		if (step == 0 && (textAlign & TA_CENTER)==TA_CENTER)
 		{
@@ -955,17 +995,17 @@ size_t Emf2Pdf::PDFTextOut(unsigned long code)
 	free(dx);
 	HPDF_Page_EndText(page);
 	HPDF_Page_SetTextRenderingMode(page, HPDF_FILL);
-	if (currentFont.underline)
+	if (currentFont->underline)
 	{
 		HPDF_Page_MoveTo(page, startX, y - size / 10);
 		HPDF_Page_LineTo(page, endX, y - size / 10);
 	}
-	if (currentFont.strike)
+	if (currentFont->strike)
 	{
 		HPDF_Page_MoveTo(page, startX, y + size / 2);
 		HPDF_Page_LineTo(page, endX, y + size / 2);
 	}
-	if (currentFont.strike || currentFont.underline)
+	if (currentFont->strike || currentFont->underline)
 		HPDF_Page_Stroke(page);
 
 	HPDF_Page_SetLineWidth(page, currentPen.width);
