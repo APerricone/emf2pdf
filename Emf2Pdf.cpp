@@ -202,8 +202,8 @@ size_t Emf2Pdf::Header()
 	// v/2540*72 --> 72ths of inch
 	// v*72/2540 --> 72ths of inch
 	// v*18/635 --> 72ths of inch
-	HPDF_Page_SetWidth(page, (HPDF_REAL)(frame.right * 18. / 635.));
-	HPDF_Page_SetHeight(page, (HPDF_REAL)(frame.bottom * 18. / 635.));
+	HPDF_Page_SetWidth(page, (HPDF_REAL)((frame.right-frame.left) * 18. / 635.));
+	HPDF_Page_SetHeight(page, (HPDF_REAL)((frame.bottom-frame.top) * 18. / 635.));
 	nRead += sizeof(RECTL) * 2;
 	fseek(f, 32, SEEK_CUR);
 	SIZEL dev;
@@ -690,7 +690,11 @@ void Emf2Pdf::SetEncoding(unsigned char idx)
 		if (memcmp(name, "CP", 2) == 0)
 		{ //TEMP: Do it better
 			char tmp[10];
+#ifdef _WINDOWS_
+			strcpy_s(tmp,10, name + 1);
+#else
 			strcpy(tmp, name + 1);
+#endif
 			*tmp = '.';
 			setlocale(LC_ALL, tmp);
 		}
@@ -1170,9 +1174,18 @@ size_t Emf2Pdf::StretchDiBits(unsigned long code)
 			}
 			break;
 		case 16:
-			if (palette) free(palette);
+			cs = HPDF_CS_DEVICE_RGB;
+			nBit = 8;
+			newB = (unsigned char*)malloc(bmi.biWidth*bmi.biHeight * 3);
+			destPtr = newB;
+			for (i = 0; i < dimBits; i += 3, destPtr += 3, src += 2)
+			{ //5:5:5
+				destPtr[0] = (src[1] >> 2);
+				destPtr[1] = ((src[1] & 3) << 3) + (src[0] >> 5);
+				destPtr[2] = (src[0] & 31);
+			}
 			free(bits);
-			return ret;
+			bits = newB;
 			break;
 		case 24:
 			cs = HPDF_CS_DEVICE_RGB;

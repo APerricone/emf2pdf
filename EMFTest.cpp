@@ -17,7 +17,7 @@ int main(int argc, const char* argv[])
 
 	/*/
 	const char *fileToOpen;
-	fileToOpen = "2208781.emf"; 
+	fileToOpen = "PAGINA.emf"; 
 	if (argc > 1) fileToOpen = argv[1];
 	HPDF_Doc pdf = HPDF_New(0, 0);
 	Emf2Pdf conv(pdf);
